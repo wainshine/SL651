@@ -1,4 +1,4 @@
-"""SLT427-2021 水资源监测数据传输规约 解码器。
+"""SL427-2021 水资源监测数据传输规约 解码器。
 
 帧结构: 68 L 68 | C | A(5B) | AFN | data... | CS(CRC8) | 16
 """
@@ -40,7 +40,7 @@ class ElementValue:
 
 @dataclass
 class DecodedMessage:
-    """SLT427 报文解析结果。"""
+    """SL427 报文解析结果。"""
 
     hex_input: str = ""
     direction: str = ""
@@ -183,13 +183,9 @@ def _parse_terminal(data: bytes) -> list[ElementValue]:
         ))
     return items
 
-
 def _fmt_time_427(data: bytes) -> str:
-    """SLT427 时间格式：秒 分 时 日 月 年 [第7字节]。
+    """Tp 时间标签（6.3.3.8）：前6B BCD(秒分时日月年) + 第7B BIN允许传输延时时长(min)。"""
 
-    注：第7字节含义待规约核实——IEC CP56Time2a 定义为星期(1~7)，
-    njnrs 实现释为延迟分钟。当前暂按延迟解释，>0 时附加显示。
-    """
     sec = safe_bcd_to_int(data[0]) or 0
     min_val = safe_bcd_to_int(data[1]) or 0
     hour = safe_bcd_to_int(data[2]) or 0
@@ -199,24 +195,27 @@ def _fmt_time_427(data: bytes) -> str:
     delay = data[6] if len(data) > 6 else 0
     r = f"20{year:02d}-{month:02d}-{day:02d} {hour:02d}:{min_val:02d}:{sec:02d}"
     if delay > 0:
-        r += f" (延迟{delay}分)"
+        r += f" (传输延时限{delay}min)"
     return r
 
-
 def _format_addr(addr: bytes) -> str:
-    """格式化地址域（启发式展示，来源于 SL651 语义）。
+    """格式化地址域 A（表7/表8）。
 
-    注：SLT427 地址域源于 IEC 公共地址，语义/字节序可能与 SL651 不同。
-    当前采用 SL651 方式1/方式2 + 站址阈值作为启发式展示，待规约核实。
+    方式1: A1=3B BCD(行政区划码) + A2=2B BIN(站址, 小端)
+    方式2: BYTE1=00H + BYTE2~5=8位HEX监测站编码(nibble-packed)
     """
+
     if addr[0] == 0x00:
-        return f"方式2 站点编码: {bytes_to_hex_compact(addr[1:])}"
+        hex_code = ""
+        for b in addr[1:]:
+            hex_code += f"{b:X}"  # nibble-packed HEX
+        return f"方式2 站点编码: {hex_code}"
     admin = bcd_bytes_to_int(bytes(addr[:3]))
-    stn_id = (addr[4] << 8) | addr[3]
+    stn_id = int.from_bytes(bytes(addr[3:5]), "little")  # A2=2B BIN little-endian
     if stn_id <= 60000:
         label = "遥测站"
     elif stn_id <= 65534:
-        label = "中心站"
+        label = "中继站"
     else:
         label = "广播地址"
     return f"方式1 行政区划:{admin} 站址:{stn_id} ({label})"
@@ -237,8 +236,8 @@ def _build_byte_map(bytes_list: list[int]) -> str:
     return " ".join(parts)
 
 
-class SLT427Decoder:
-    """SLT427 报文解码器。"""
+class SL427Decoder:
+    """SL427 报文解码器。"""
 
     def decode_hex(self, hex_str: str) -> DecodedMessage:
         cleaned = "".join(hex_str.split())
@@ -348,29 +347,25 @@ class SLT427Decoder:
             ))
 
         elif afn_hex == "c0":
+            # 自报实时数据: D + alarm(2B) + state(2B) + Tp(7B)
             raw_len = len(data_field)
-            tp_len = 7
-            if raw_len >= 9:
-                real_data_len = raw_len - 4 - tp_len
-                if real_data_len > 0:
-                    real_data = data_field[:real_data_len]
+            if raw_len >= C.TP_LEN + 4:
+                tp_bytes = data_field[-C.TP_LEN:]
+                state_bytes = data_field[-C.TP_LEN - 2:-C.TP_LEN]
+                alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
+                real_data = data_field[:-C.TP_LEN - 4]
+                if len(real_data) > 0:
                     if func_code == 0x0E:
                         elements.extend(_parse_comprehensive(real_data))
                     else:
                         elements.extend(_parse_ctrl_func_data(func_code, real_data))
-                else:
-                    real_data_len = 0
-                alarm_bytes = data_field[real_data_len: real_data_len + 2]
-                state_bytes = data_field[real_data_len + 2: real_data_len + 4]
-                tp_bytes = data_field[real_data_len + 4:]
-
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)
                 elements.append(ElementValue(
                     name="观测时间", value=tp_str, unit="",
                     raw=bytes_to_hex_compact(tp_bytes),
-                    is_time=True, byte_len=tp_len,
+                    is_time=True, byte_len=C.TP_LEN,
                 ))
 
         elif afn_hex == "b0":
@@ -402,8 +397,8 @@ class SLT427Decoder:
 
 
 def decode_hex(hex_str: str) -> DecodedMessage:
-    return SLT427Decoder().decode_hex(hex_str)
+    return SL427Decoder().decode_hex(hex_str)
 
 
 def decode(frame: bytes) -> DecodedMessage:
-    return SLT427Decoder().decode(frame)
+    return SL427Decoder().decode(frame)

@@ -16,7 +16,7 @@ sl651-toolkit/
 │   ├── constants.py            # 101 要素表、FF 子标识符、定义符、帧结构常量
 │   ├── decoder.py              # 解码器（定义符动态解析）
 │   └── encoder.py              # 编码器
-├── slt427/                     # SLT427 协议核心
+├── sl427/                     # SL427 协议核心
 │   ├── constants.py            # 控制功能码、AFN 表、告警位
 │   └── decoder.py              # 68H 帧解析器
 ├── simulator/                  # 设备模拟器
@@ -28,7 +28,7 @@ sl651-toolkit/
 │   ├── sender.py               # MqttxSender（mqttx CLI）+ TcpSender（TCP socket）
 │   └── engine.py               # 定时循环引擎
 ├── tools/
-│   ├── decode_cli.py           # 解码 CLI（sl651 / slt427 双协议）
+│   ├── decode_cli.py           # 解码 CLI（sl651 / sl427 双协议）
 │   └── simulate_cli.py         # 模拟器 CLI
 ├── examples/
 │   ├── stations.yaml           # 多站点配置
@@ -60,8 +60,8 @@ sl651-toolkit/
 # SL651 解码
 python tools/decode_cli.py sl651 --hex "7E7E2500418D233700..."
 
-# SLT427 解码
-python tools/decode_cli.py slt427 --hex "681568..."
+# SL427 解码
+python tools/decode_cli.py sl427 --hex "681568..."
 
 # 文件批量解码
 python tools/decode_cli.py sl651 --file messages.txt
@@ -103,7 +103,7 @@ CRC 校验      : 通过 (接收=0x5AC6, 计算=0x5AC6)
 
 ```python
 from sl651 import SL651Decoder
-from slt427 import SLT427Decoder
+from sl427 import SL427Decoder
 
 # SL651
 r = SL651Decoder().decode_hex("7E7E...")
@@ -113,8 +113,8 @@ print(r.tx_time_display)
 for e in r.elements:
     print(f"  [{e.code}] {e.name}: {e.display_value}")
 
-# SLT427
-r = SLT427Decoder().decode_hex("68...")
+# SL427
+r = SL427Decoder().decode_hex("68...")
 print(r.afn_name)
 print(r.direction)
 for e in r.elements:
@@ -204,7 +204,7 @@ python tests/test_sl651.py
 
 - **v1.1.0**：基于 njnrs 实现重构
   - 解码器：定义符动态解析、101 要素表、FF 子标识符、状态位解码
-  - 新增 SLT427 解码器（68H 帧 + CRC8）
+  - 新增 SL427 解码器（68H 帧 + CRC8）
   - 模拟器：拆分 sender/engine，MQTT 改用 mqttx CLI，新增 TCP 直连模式
   - CRC 修正为 CRC-16/MODBUS，负数 BCD 编码修复
 - **v1.0.0**：初始版本（GLM 生成）

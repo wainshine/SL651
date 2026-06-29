@@ -1,4 +1,4 @@
-"""SL651 / SLT427 协议 BCD 编解码与字节流工具。"""
+"""SL651 / SL427 协议 BCD 编解码与字节流工具。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def bcd_bytes_to_int(data: bytes) -> int:
 
 
 def bcd_bytes_to_int_le(data: bytes) -> int:
-    """多字节 BCD（小端） -> 整数。用于 SLT427 数据域。"""
+    """多字节 BCD（小端） -> 整数。用于 SL427 数据域。"""
     result = 0
     for i in range(len(data) - 1, -1, -1):
         result = result * 100 + bcd_to_int(data[i])

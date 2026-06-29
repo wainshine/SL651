@@ -8,7 +8,7 @@
 | 审计对象 | `sl651-toolkit`（24 个源文件） |
 | 对比基线 | v1.0 审计报告 |
 | 参考依据 | SL/T 651-2014 水文监测数据通信规约、SL/T 427-2021 水资源监测数据传输规约 |
-| 基准工具 | 南京蓉水 njnrs.com SL651 报文解析器、SLT427 报文解析器 |
+| 基准工具 | 南京蓉水 njnrs.com SL651 报文解析器、SL427 报文解析器 |
 | 审计方式 | 只审不修 |
 
 ## 二、相对 v1.0 的变化摘要
@@ -42,7 +42,7 @@ YAML 已适配 `sender.proto/broker/topic` 结构。
 
 `_encode_bcd` 采用规范 `0xFF` 前缀；解码器同步处理。`test_negative_bcd` 覆盖。
 
-### 3.4 ✅ SLT427 `_parse_comprehensive` 跳位
+### 3.4 ✅ SL427 `_parse_comprehensive` 跳位
 
 已添加注释说明 bit0 含义。
 
@@ -54,9 +54,9 @@ YAML 已适配 `sender.proto/broker/topic` 结构。
 
 `__init__.py:44` → `"1.1.0"`，README 标题 → `v1.1.0`。已一致。
 
-### 4.2 🚫 SLT427 无编码器
+### 4.2 🚫 SL427 无编码器
 
-`slt427/` 仅有 `decoder.py` + `constants.py`。当前只需解码，编码暂不需要。
+`sl427/` 仅有 `decoder.py` + `constants.py`。当前只需解码，编码暂不需要。
 
 ### 4.3 🚫 测试未覆盖模拟器链路
 
@@ -129,7 +129,7 @@ SL651 工具包自测
 >>> 水测家加报报解码           OK
 >>> 编码 → 解码往返           OK
 >>> CRC8                      OK
->>> SLT427 解码                OK
+>>> SL427 解码                OK
 >>> 负数 BCD 编解码            OK
 >>> 无效BCD数据优雅降级         OK
 
@@ -144,7 +144,7 @@ SL651 工具包自测
 
 | 项 | 说明 |
 |----|------|
-| 无 SLT427 编码器 | 当前只需解码 SLT427 报文，编码暂不需要 |
+| 无 SL427 编码器 | 当前只需解码 SL427 报文，编码暂不需要 |
 | 缺 ASCII 帧支持 | 当前目标场景为 HEX/BCD 编码帧；ASCII 帧按需扩展 |
 | 模拟器链路无自动化测试 | 模拟器为辅助工具，测试侧重协议编解码正确性 |
 | 日志配置依赖调用方 | 库代码使用 `logging.getLogger(__name__)` 为标准 Python 惯例 |

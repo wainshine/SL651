@@ -1,7 +1,7 @@
-"""SL651 / SLT427 协议校验算法。
+"""SL651 / SL427 协议校验算法。
 
 - CRC-16/MODBUS: SL651, 多项式 0xA001 (0x8005 反转), 初值 0xFFFF
-- CRC8: SLT427, 多项式 0xE5, 初值 0x00
+- CRC8: SL427, 多项式 0xE5, 初值 0x00
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def crc16_bytes(data: bytes) -> bytes:
 
 
 def crc8(data: bytes) -> int:
-    """计算 SLT427 CRC8 校验值（多项式 0xE5，初值 0x00）。"""
+    """计算 SL427 CRC8 校验值（多项式 0xE5，初值 0x00）。"""
     crc = 0
     for byte in data:
         crc ^= byte

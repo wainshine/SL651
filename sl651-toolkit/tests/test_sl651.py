@@ -102,14 +102,34 @@ def test_crc8() -> None:
     print("    OK")
 
 
-def test_slt427() -> None:
-    from slt427 import SLT427Decoder
-    print(">>> SLT427 解码")
+def test_sl427() -> None:
+    from sl427 import SL427Decoder
+    print(">>> SL427 解码")
     msg = "681568B40102030405C05545040020700030151412052600AD16"
-    r = SLT427Decoder().decode_hex(msg)
+    r = SL427Decoder().decode_hex(msg)
     assert r.crc_ok
     assert r.afn == 0xC0
     assert r.ctrl_func_name == "流速"
+    print("    OK")
+
+
+def test_sl427_encoder() -> None:
+    from sl427 import SL427Encoder, SL427Decoder, make_ctrl, encode_address, encode_tp
+    from datetime import datetime
+    from sl651.bcd import int_to_bcd_bytes
+    print(">>> SL427 编码往返")
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    # heartbeat
+    f = enc.build_heartbeat()
+    r = SL427Decoder().decode(f)
+    assert r.crc_ok and r.afn == 0x02
+    # C0 self-report
+    wl_data = bytes(reversed(int_to_bcd_bytes(37865, 4)))
+    f2 = enc.build_self_report_c0(func_code=0x02, data=wl_data,
+                                   tp=datetime(2026, 5, 12, 14, 15, 30))
+    r2 = SL427Decoder().decode(f2)
+    assert r2.crc_ok and r2.afn == 0xC0
     print("    OK")
 
 
@@ -150,7 +170,7 @@ def main() -> int:
         test_bcd, test_crc, test_def_byte,
         test_decode_njnrs, test_decode_watertester,
         test_encode_decode_roundtrip,
-        test_crc8, test_slt427, test_negative_bcd, test_invalid_bcd_graceful,
+        test_crc8, test_sl427, test_sl427_encoder, test_negative_bcd, test_invalid_bcd_graceful,
     ]
     for test in tests:
         try:

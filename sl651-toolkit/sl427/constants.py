@@ -1,10 +1,18 @@
-"""SLT427-2021 水资源监测数据传输规约 常量定义。
+"""SL427-2021 水资源监测数据传输规约 常量定义。
 
-基于 IEC 60870-5-101 帧结构，参考 njnrs 实现。
+帧结构（表3）:
 
-帧结构::
+    68 L 68 | C | A(5B) | AFN | D [| PW(2B)] [| Tp(7B)] | CS(CRC8) | 16
 
-    68 L L 68 | C(1B) | A(5B) | AFN(1B) | data... | CS(1B CRC8) | 16
+地址域A（6.3.3.4）:
+    方式1: A1=3B BCD(行政区划码) + A2=2B BIN(站址,小端)
+    方式2: BYTE1=00H + BYTE2~5=8位HEX监测站编码(nibble-packed)
+
+Tp时间标签（6.3.3.8）:
+    前6字节: 秒分时日月年 BCD
+    第7字节: 允许发送传输延时时长 BIN 单位min
+
+CRC8: 多项式 X7+X6+X5+X2+1 (0xE5) 初值0
 """
 
 from __future__ import annotations
@@ -13,7 +21,9 @@ START_BYTE = 0x68
 END_BYTE = 0x16
 
 AFN_MAP: dict[int, str] = {
-    0x02: "链路监测（心跳）",
+    0x02: "链路检测（心跳）",
+    0x10: "设置地址",
+    0x11: "设置时钟",
     0xC0: "自报实时数据",
     0xB0: "查询/实时值",
     0x61: "图像数据",
@@ -76,12 +86,25 @@ TERMINAL_BITS = [
     {"bit": 6, "name": "电源工作状态", "map": {0: "AC220V供电", 1: "蓄电池供电"}},
 ]
 
+# AFN 类别：无AUX / 仅Tp / PW+Tp
+AFN_NO_AUX = {0x02}
+AFN_TP_ONLY = {0xC0, 0x81, 0x82, 0x83, 0x84, 0xFF}
+AFN_PW_TP = {0x10, 0x11}  # 参数设置类
+
+TP_LEN = 7
+PW_LEN = 2
+
 
 def parse_ctrl(c: int) -> dict:
-    """解析控制域字节 C。"""
+    """解析控制域字节 C（表4）。"""
     return {
         "dir": (c >> 7) & 1,
         "div": (c >> 6) & 1,
         "fcb": (c >> 4) & 0x03,
         "func_code": c & 0x0F,
     }
+
+
+def make_ctrl(dir_: int, func_code: int, div: int = 0, fcb: int = 0) -> int:
+    """构造控制域字节 C。"""
+    return ((dir_ & 1) << 7) | ((div & 1) << 6) | ((fcb & 3) << 4) | (func_code & 0x0F)

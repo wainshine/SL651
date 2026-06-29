@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SL651 / SLT427 水文规约报文解码工具。
+"""SL651 / SL427 水文规约报文解码工具。
 
 用法::
 
@@ -7,9 +7,9 @@
     python decode_cli.py sl651 --hex "7E7E25..."
     python decode_cli.py sl651 --file samples.txt
 
-    # SLT427 解码
-    python decode_cli.py slt427 --hex "68..."
-    python decode_cli.py slt427 --file slt427_samples.txt
+    # SL427 解码
+    python decode_cli.py sl427 --hex "68..."
+    python decode_cli.py sl427 --file sl427_samples.txt
 
     # JSON 输出
     python decode_cli.py sl651 --hex "..." -o json
@@ -27,7 +27,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sl651.decoder import DecodeError as SL651DecodeError, SL651Decoder
-from slt427.decoder import DecodeError as SLT427DecodeError, SLT427Decoder
+from sl427.decoder import DecodeError as SL427DecodeError, SL427Decoder
 
 
 def format_sl651(result) -> str:
@@ -67,7 +67,7 @@ def format_sl651(result) -> str:
     return "\n".join(lines)
 
 
-def format_slt427(result) -> str:
+def format_sl427(result) -> str:
     lines = []
     lines.append("=" * 72)
     lines.append(f"原始报文: {result.hex_input}")
@@ -101,12 +101,12 @@ def format_slt427(result) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="SL651 / SLT427 水文规约报文解码工具",
+        description="SL651 / SL427 水文规约报文解码工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
   %(prog)s sl651 --hex "7E7E25..."
-  %(prog)s slt427 --hex "68..."
+  %(prog)s sl427 --hex "68..."
   %(prog)s sl651 --file messages.txt -o json
 """,
     )
@@ -114,7 +114,7 @@ def main() -> int:
 
     p651 = sub.add_parser("sl651", help="SL651-2014 水文监测数据通信规约")
 
-    p427 = sub.add_parser("slt427", help="SLT427-2021 水资源监测数据传输规约")
+    p427 = sub.add_parser("sl427", help="SL427-2021 水资源监测数据传输规约")
 
     for p in (p651, p427):
         p.add_argument("--hex", help="十六进制报文字符串")
@@ -124,7 +124,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    if args.protocol not in ("sl651", "slt427"):
+    if args.protocol not in ("sl651", "sl427"):
         parser.print_help()
         return 1
 
@@ -159,8 +159,8 @@ def main() -> int:
         decoder = SL651Decoder()
         err_cls = SL651DecodeError
     else:
-        decoder = SLT427Decoder()
-        err_cls = SLT427DecodeError
+        decoder = SL427Decoder()
+        err_cls = SL427DecodeError
 
     for i, msg in enumerate(messages, 1):
         try:
@@ -181,7 +181,7 @@ def main() -> int:
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:
-        fmt_fn = format_sl651 if args.protocol == "sl651" else format_slt427
+        fmt_fn = format_sl651 if args.protocol == "sl651" else format_sl427
         for r in results:
             print(fmt_fn(r))
             print()
