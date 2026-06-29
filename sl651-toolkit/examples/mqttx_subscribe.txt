@@ -1,0 +1,30 @@
+# SL651 模拟器 - MQTTX 订阅配置示例
+# 在 MQTTX 中按以下配置订阅，即可查看模拟器推送的报文
+
+# ===== 单站点订阅 =====
+# 订阅水位站 0000000001 的二进制报文（需 MQTTX 支持 hex 显示）
+sl651/0000000001/uplink
+
+# 订阅水位站 0000000001 的 hex 字符串报文（推荐，便于查看）
+sl651/0000000001/uplink/hex
+
+# ===== 通配符订阅所有站点 =====
+# 所有二进制报文
+sl651/+/uplink
+
+# 所有 hex 字符串报文
+sl651/+/uplink/hex
+
+# ===== MQTTX 连接配置 =====
+# Broker Address: 127.0.0.1 (或你的 MQTT 服务器地址)
+# Port: 1883
+# Client ID: mqttx-subscriber-xxxx
+# Username: (如有)
+# Password: (如有)
+# Protocol: MQTT v3.1.1
+
+# ===== MQTTX 发布测试（手动发布一帧报文）=====
+# Topic: sl651/0000000001/uplink/hex
+# Payload (hex 字符串格式):
+#   7E0120000000000112340501410011402606291030000040005234004505180080012657E
+# Format: Plain
