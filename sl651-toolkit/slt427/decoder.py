@@ -1,6 +1,6 @@
 """SLT427-2021 水资源监测数据传输规约 解码器。
 
-帧结构: 68 L L 68 | C | A(5B) | AFN | data... | CS(CRC8) | 16
+帧结构: 68 L 68 | C | A(5B) | AFN | data... | CS(CRC8) | 16
 """
 
 from __future__ import annotations
@@ -185,7 +185,11 @@ def _parse_terminal(data: bytes) -> list[ElementValue]:
 
 
 def _fmt_time_427(data: bytes) -> str:
-    """SLT427 时间格式：秒 分 时 日 月 年 [延迟]。"""
+    """SLT427 时间格式：秒 分 时 日 月 年 [第7字节]。
+
+    注：第7字节含义待规约核实——IEC CP56Time2a 定义为星期(1~7)，
+    njnrs 实现释为延迟分钟。当前暂按延迟解释，>0 时附加显示。
+    """
     sec = safe_bcd_to_int(data[0]) or 0
     min_val = safe_bcd_to_int(data[1]) or 0
     hour = safe_bcd_to_int(data[2]) or 0
@@ -200,7 +204,11 @@ def _fmt_time_427(data: bytes) -> str:
 
 
 def _format_addr(addr: bytes) -> str:
-    """格式化地址域。"""
+    """格式化地址域（启发式展示，来源于 SL651 语义）。
+
+    注：SLT427 地址域源于 IEC 公共地址，语义/字节序可能与 SL651 不同。
+    当前采用 SL651 方式1/方式2 + 站址阈值作为启发式展示，待规约核实。
+    """
     if addr[0] == 0x00:
         return f"方式2 站点编码: {bytes_to_hex_compact(addr[1:])}"
     admin = bcd_bytes_to_int(bytes(addr[:3]))
@@ -260,6 +268,9 @@ class SLT427Decoder:
 
         user_start = 3
         cs_pos = total - 2
+        user_len_actual = cs_pos - user_start
+        if user_len_actual < 0 or user_len_actual != data_len:
+            raise DecodeError(f"L={data_len} 但用户区实际长度={user_len_actual}，不匹配")
         user_data = bytes(bytes_list[user_start: cs_pos])
         calc_crc = crc8(user_data)
         recv_crc = bytes_list[cs_pos]
@@ -297,7 +308,7 @@ class SLT427Decoder:
             ctrl_func_name=ctrl_func_name,
             addr_display=addr_display,
             afn=afn,
-            afn_name=afn_name if not is_downlink else afn_name,
+            afn_name=afn_name,
             data_len=data_len,
             crc_calc=calc_crc,
             crc_recv=recv_crc,
@@ -316,8 +327,10 @@ class SLT427Decoder:
         is_downlink = not ctrl["dir"]
 
         if is_downlink:
+            afn_label = C.AFN_MAP.get(afn, f"未知(0x{afn:02X})")
+            func_label = C.CTRL_FUNC_MAP.get(ctrl["func_code"], {}).get("name", "未知")
             elements.append(ElementValue(
-                name="下行报文", value=f"功能码: {C.CTRL_FUNC_MAP.get(ctrl['func_code'], {}).get('name', '未知')}",
+                name="下行报文", value=f"AFN=0x{afn:02X}({afn_label}) 功能=({func_label})",
                 unit="", raw=bytes_to_hex_compact(data_field), editable=False,
             ))
             return elements, special_info

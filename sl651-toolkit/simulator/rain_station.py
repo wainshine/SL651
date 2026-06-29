@@ -20,9 +20,9 @@ class RainStation(BaseStation):
     def generate_elements(self) -> list[tuple[int, float, int, int]]:
         daily, hourly, intensity = self.rain_gen.next(self.tick)
         return [
-            (0x1F, daily, 3, 1),     # 日降水量
+            (0x1F, daily, 3, 1),     # 日降水量（当日累计）
             (0x1A, hourly, 3, 1),    # 1小时降雨量
-            (0x20, daily, 3, 1),     # 当前降水量（累计）
+            (0x20, hourly, 3, 1),    # 当前降水量（当前小时累计）
             (0x26, daily, 3, 1),     # 累计雨量
             (0x38, self.voltage_gen.next(), 2, 2),
         ]

@@ -182,10 +182,10 @@ def _build_byte_map(bytes_list: list[int], direction: int, etx_pos: int) -> str:
 def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int) -> list[dict]:
     fields = [
         (0, 1, "帧起始符 7E7E"),
-        (2, 2, "中心站址"),
     ]
     if direction == 0:
         fields += [
+            (2, 2, "中心站址"),
             (3, 7, "遥测站地址(5字节)"),
             (8, 9, "密码"),
             (10, 10, "功能码"),
@@ -202,7 +202,8 @@ def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int) -> li
         ]
     else:
         fields += [
-            (3, 7, "目标站码(5字节)"),
+            (2, 6, "遥测站地址(5字节)"),
+            (7, 7, "中心站址"),
             (8, 9, "密码"),
             (10, 10, "功能码"),
             (11, 12, "报文标识"),
@@ -248,18 +249,24 @@ class SL651Decoder:
 
         bytes_list = list(frame)
         total = len(bytes_list)
-        center = bytes_list[2]
-        reserved = bytes_list[3:8]
-        pwd = bytes_list[8:10]
-        func = bytes_list[10]
         ident_hi = bytes_list[11]
         ident_lo = bytes_list[12]
         direction = (ident_hi >> 7) & 1
         body_len = ((ident_hi & 0x7F) << 8) | ident_lo
         stx = bytes_list[C.STX_OFFSET]
 
-        if stx != C.STX:
-            raise DecodeError(f"STX 应为 02H，实际 {stx:02X}H")
+        # 表11(上行): [7E7E][中心站址][遥测站址]; 表12(下行): [7E7E][遥测站址][中心站址]
+        if direction == 0:
+            center = bytes_list[2]
+            station_raw = bytes_list[3:8]
+        else:
+            station_raw = bytes_list[2:7]
+            center = bytes_list[7]
+        pwd = bytes_list[8:10]
+        func = bytes_list[10]
+
+        if stx not in (C.STX, C.SYN):
+            raise DecodeError(f"报文起始符应为 02H(STX) 或 16H(SYN)，实际 {stx:02X}H")
 
         serial = bytes_list[C.BODY_OFFSET:C.BODY_OFFSET + C.SERIAL_LEN]
         tx_time_bytes = bytes(bytes_list[C.BODY_OFFSET + C.SERIAL_LEN:
@@ -285,21 +292,27 @@ class SL651Decoder:
         obs_time_bytes = b""
 
         if direction == 0:
-            f1_check = bytes_list[C.F1_OFFSET:C.F1_OFFSET + 2]
-            if f1_check[0] != 0xF1 or f1_check[1] != 0xF1:
-                raise DecodeError("上行报文站码标识应为 F1F1")
-            f0_check = bytes_list[C.F0_OFFSET:C.F0_OFFSET + 2]
-            if f0_check[0] != 0xF0 or f0_check[1] != 0xF0:
-                raise DecodeError("上行报文观测时间标识应为 F0F0")
-            stn_code = bytes(bytes_list[C.STN_CODE_OFFSET:C.STN_CODE_OFFSET + 5])
-            stn_type = bytes_list[C.STN_TYPE_OFFSET]
-            stn_type_hex = f"{stn_type:02X}"
-            stn_type_name = C.STATION_TYPE.get(stn_type, "未知")
-            obs_time_bytes = bytes(bytes_list[C.OBS_TIME_OFFSET:
-                                               C.OBS_TIME_OFFSET + C.OBS_TIME_LEN])
+            # 上行: 表11 结构 — 偏移22/30有 F1F1/F0F0 标识
+            can_parse_stn = (
+                bytes_list[C.F1_OFFSET] == 0xF1 and bytes_list[C.F1_OFFSET + 1] == 0xF1 and
+                bytes_list[C.F0_OFFSET] == 0xF0 and bytes_list[C.F0_OFFSET + 1] == 0xF0
+            )
+            if can_parse_stn:
+                stn_code = bytes(bytes_list[C.STN_CODE_OFFSET:C.STN_CODE_OFFSET + 5])
+                stn_type = bytes_list[C.STN_TYPE_OFFSET]
+                stn_type_hex = f"{stn_type:02X}"
+                stn_type_name = C.STATION_TYPE.get(stn_type, "未知")
+                obs_time_bytes = bytes(bytes_list[C.OBS_TIME_OFFSET:
+                                                   C.OBS_TIME_OFFSET + C.OBS_TIME_LEN])
+                data_start = C.UPLINK_DATA_OFFSET
+            else:
+                # 2F 链路维持 / 35 人工置数 / 多包 SYN 等无 F1/F0 的结构
+                stn_code = bytes(station_raw)
+                data_start = C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN
         else:
-            stn_code = bytes(reserved)
+            stn_code = bytes(station_raw)
             obs_time_bytes = b"\x00" * C.OBS_TIME_LEN
+            data_start = C.DOWNLINK_DATA_OFFSET
 
         station_addr = bytes_to_hex_compact(stn_code) if stn_code else ""
         obs_hex = bytes_to_hex_compact(obs_time_bytes) if obs_time_bytes else ""
@@ -310,7 +323,6 @@ class SL651Decoder:
         obs_display = _fmt_bcd_time_nosec(obs_hex) if obs_hex else ""
         tx_display = _fmt_bcd_time_sec(tx_hex)
 
-        data_start = C.UPLINK_DATA_OFFSET if direction == 0 else C.DOWNLINK_DATA_OFFSET
         data_bytes = bytes(bytes_list[data_start:etx_pos])
         elements = self._parse_elements(data_bytes)
 

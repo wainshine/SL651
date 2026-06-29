@@ -24,6 +24,7 @@ UPLINK_DATA_OFFSET = 37   # 上行要素数据起始偏移
 DOWNLINK_DATA_OFFSET = 22 # 下行响应数据起始偏移
 
 STX = 0x02
+SYN = 0x16
 ETX = 0x03
 ETB = 0x17
 EOT = 0x04

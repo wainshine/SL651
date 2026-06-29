@@ -38,9 +38,12 @@ def bcd_bytes_to_int_le(data: bytes) -> int:
 
 
 def int_to_bcd_bytes(value: int, length: int) -> bytes:
-    """整数 -> 指定长度 BCD 字节序列（大端）。"""
+    """整数 -> 指定长度 BCD 字节序列（大端）。超限抛 ValueError。"""
     if length <= 0:
         return b""
+    max_val = 10 ** (length * 2) - 1
+    if value < 0 or value > max_val:
+        raise ValueError(f"值 {value} 超出 {length} 字节 BCD 范围 (0~{max_val})")
     digits = f"{value:0{length * 2}d}"
     return bytes(int_to_bcd(int(digits[i: i + 2])) for i in range(0, len(digits), 2))
 

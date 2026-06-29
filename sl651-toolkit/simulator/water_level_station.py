@@ -19,6 +19,6 @@ class WaterLevelStation(BaseStation):
 
     def generate_elements(self) -> list[tuple[int, float, int, int]]:
         return [
-            (0x39, self.water_gen.next(self.tick), 3, 2),   # 瞬时河道水位
+            (0x39, self.water_gen.next(self.tick), 4, 3),   # 瞬时河道水位 N(7,3)
             (0x38, self.voltage_gen.next(), 2, 2),           # 电池电压
         ]

@@ -45,13 +45,12 @@ class SL651Encoder:
     ):
         self.center_addr = center_addr & 0xFF
         self.station_addr_hex = station_addr
-        if len(station_addr) == 10:
-            try:
-                self.station_addr_bytes = bytes.fromhex(station_addr)
-            except ValueError:
-                raise EncodeError(f"station_addr 不是有效 hex: {station_addr!r}")
-        else:
-            self.station_addr_bytes = b"\x00" * 5
+        if len(station_addr) != 10:
+            raise EncodeError(f"station_addr 必须为 10 位十六进制字符串，当前: {station_addr!r}")
+        try:
+            self.station_addr_bytes = bytes.fromhex(station_addr)
+        except ValueError:
+            raise EncodeError(f"station_addr 不是有效 hex: {station_addr!r}")
         self.password = password & 0xFFFF
         self.station_type = station_type & 0xFF
         self._serial = int(datetime.now().timestamp()) % 65535  # 用时间戳保证重启后不重复
@@ -76,8 +75,13 @@ class SL651Encoder:
         ident_lo = body_len & 0xFF
 
         header_body = bytearray()
-        header_body.append(self.center_addr)
-        header_body.extend(self.station_addr_bytes)
+        # 表11(上行): [中心][站址]; 表12(下行): [站址][中心]
+        if direction == C.DIR_UPLINK:
+            header_body.append(self.center_addr)
+            header_body.extend(self.station_addr_bytes)
+        else:
+            header_body.extend(self.station_addr_bytes)
+            header_body.append(self.center_addr)
         header_body.append((self.password >> 8) & 0xFF)
         header_body.append(self.password & 0xFF)
         header_body.append(function_code)
