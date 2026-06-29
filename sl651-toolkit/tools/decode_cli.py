@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""SL651 报文解码 CLI 工具。
+"""SL651 / SLT427 水文规约报文解码工具。
 
-用法示例::
+用法::
 
-    # 解析十六进制字符串
-    python decode_cli.py "7E 01 12 34 56 78 90 12 34 05 01 A1 ..."
+    # SL651 解码
+    python decode_cli.py sl651 --hex "7E7E25..."
+    python decode_cli.py sl651 --file samples.txt
 
-    # 从文件读取（每行一条报文）
-    python decode_cli.py -f messages.txt
+    # SLT427 解码
+    python decode_cli.py slt427 --hex "68..."
+    python decode_cli.py slt427 --file slt427_samples.txt
 
-    # 输出 JSON
-    python decode_cli.py -f messages.txt -o json
-
-    # 从标准输入读取
-    echo "7E..." | python decode_cli.py
+    # JSON 输出
+    python decode_cli.py sl651 --hex "..." -o json
 """
 
 from __future__ import annotations
@@ -23,40 +22,44 @@ import json
 import sys
 from pathlib import Path
 
-# 支持直接运行（python decode_cli.py）和模块运行（python -m tools.decode_cli）
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sl651 import SL651Decoder, bytes_to_hex_compact
-from sl651.decoder import DecodeError
+from sl651.decoder import DecodeError as SL651DecodeError, SL651Decoder
+from slt427.decoder import DecodeError as SLT427DecodeError, SLT427Decoder
 
 
-def format_text(result) -> str:
-    """格式化为可读文本。"""
+def format_sl651(result) -> str:
     lines = []
     lines.append("=" * 72)
-    lines.append(f"原始报文: {bytes_to_hex_compact(result.raw_frame)}")
+    lines.append(f"原始报文: {result.hex_input}")
     lines.append("-" * 72)
-    lines.append(f"中心站地址    : {result.center_station_addr}")
-    lines.append(f"遥测站地址    : {result.remote_station_addr}")
+    lines.append(f"中心站地址    : {result.center_addr}")
+    lines.append(f"遥测站地址    : {result.station_addr}")
     lines.append(f"密码          : {result.password}")
-    lines.append(f"功能码        : 0x{result.function_code:02X} ({result.function_desc})")
-    lines.append(f"方向          : {result.direction_desc}")
-    lines.append(f"报文类型      : {result.message_type} ({result.message_type_desc})")
+    lines.append(f"功能码        : 0x{result.function_code:02X} ({result.function_name})")
+    lines.append(f"方向          : {result.direction_label}")
     lines.append(f"正文长度      : {result.body_length} 字节")
-    lines.append(f"是否带时间    : {'是' if result.has_time else '否'}")
-    if result.body_time:
-        lines.append(f"正文时间      : {result.body_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    lines.append(f"CRC 校验      : {'通过' if result.crc_ok else '失败'} "
-                 f"(接收=0x{result.crc_received:04X}, 计算=0x{result.crc_calculated:04X})")
+    lines.append(f"流水号        : {result.serial}")
+    lines.append(f"发报时间      : {result.tx_time_display}")
+    if result.station_type:
+        lines.append(f"测站类别      : {result.station_type} ({result.station_type_name})")
+    if result.obs_time_display:
+        lines.append(f"观测时间      : {result.obs_time_display}")
+    lines.append(f"编码方式      : {result.encoding}")
+    lines.append(
+        f"CRC 校验      : {'通过' if result.crc_ok else '失败'} "
+        f"(接收=0x{result.crc_received:04X}, 计算=0x{result.crc_calculated:04X})"
+    )
     lines.append("-" * 72)
     if result.elements:
         lines.append(f"要素数据 ({len(result.elements)} 项):")
-        lines.append(f"  {'标识符':<8} {'名称':<20} {'值':<25} {'原始HEX':<15}")
-        lines.append(f"  {'-'*8} {'-'*20} {'-'*25} {'-'*15}")
+        lines.append(f"  {'编码':<6} {'名称':<28} {'值':<25} {'单位':<8} {'原始HEX'}")
+        lines.append(f"  {'-'*6} {'-'*28} {'-'*25} {'-'*8} {'-'*12}")
         for el in result.elements:
             lines.append(
-                f"  {el.identifier:<8} {el.name:<20} {el.display_value:<25} {bytes_to_hex_compact(el.raw_bytes):<15}"
+                f"  {el.code:<6} {el.name:<28} {str(el.display_value):<25} {el.unit:<8} {el.raw}"
             )
     else:
         lines.append("要素数据: 无")
@@ -64,36 +67,68 @@ def format_text(result) -> str:
     return "\n".join(lines)
 
 
+def format_slt427(result) -> str:
+    lines = []
+    lines.append("=" * 72)
+    lines.append(f"原始报文: {result.hex_input}")
+    lines.append("-" * 72)
+    lines.append(f"方向          : {result.direction}")
+    lines.append(f"控制功能码    : {result.ctrl_func_name}")
+    lines.append(f"地址          : {result.addr_display}")
+    lines.append(f"AFN           : 0x{result.afn:02X} ({result.afn_name})")
+    lines.append(f"用户数据长度  : {result.data_len} 字节")
+    lines.append(
+        f"CRC8 校验     : {'通过' if result.crc_ok else '失败'} "
+        f"(接收=0x{result.crc_recv:02X}, 计算=0x{result.crc_calc:02X})"
+    )
+    lines.append("-" * 72)
+    if result.special_info:
+        if result.special_info.get("type") == "heart":
+            lines.append(f"心跳类型: {result.special_info.get('name')}")
+    if result.elements:
+        lines.append(f"数据要素 ({len(result.elements)} 项):")
+        lines.append(f"  {'名称':<30} {'值':<28} {'单位':<8} {'原始HEX'}")
+        lines.append(f"  {'-'*30} {'-'*28} {'-'*8} {'-'*12}")
+        for el in result.elements:
+            lines.append(
+                f"  {el.name:<30} {str(el.value):<28} {el.unit:<8} {el.raw}"
+            )
+    else:
+        lines.append("数据要素: 无")
+    lines.append("=" * 72)
+    return "\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="SL651 水文规约报文解码工具",
+        description="SL651 / SLT427 水文规约报文解码工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  %(prog)s "7E0112345678901234050141..."
-  %(prog)s -f messages.txt
-  %(prog)s -f messages.txt -o json
-  echo "7E..." | %(prog)s
+  %(prog)s sl651 --hex "7E7E25..."
+  %(prog)s slt427 --hex "68..."
+  %(prog)s sl651 --file messages.txt -o json
 """,
     )
-    parser.add_argument("hex", nargs="?", help="十六进制报文字符串（可含空格/换行）")
-    parser.add_argument("-f", "--file", help="从文件读取报文（每行一条）")
-    parser.add_argument(
-        "-o",
-        "--output",
-        choices=["text", "json"],
-        default="text",
-        help="输出格式，默认 text",
-    )
-    parser.add_argument(
-        "--raw-only",
-        action="store_true",
-        help="仅输出原始报文（用于校验）",
-    )
+    sub = parser.add_subparsers(dest="protocol", help="协议类型")
+
+    p651 = sub.add_parser("sl651", help="SL651-2014 水文监测数据通信规约")
+
+    p427 = sub.add_parser("slt427", help="SLT427-2021 水资源监测数据传输规约")
+
+    for p in (p651, p427):
+        p.add_argument("--hex", help="十六进制报文字符串")
+        p.add_argument("--file", "-f", help="从文件读取报文（每行一条）")
+        p.add_argument("--output", "-o", choices=["text", "json"], default="text", help="输出格式")
+        p.add_argument("--raw-only", action="store_true", help="仅输出原始报文")
+
     args = parser.parse_args()
 
-    # 收集待解码的报文
-    messages: list[str] = []
+    if args.protocol not in ("sl651", "slt427"):
+        parser.print_help()
+        return 1
+
+    messages = []
     if args.file:
         file_path = Path(args.file)
         if not file_path.exists():
@@ -106,7 +141,6 @@ def main() -> int:
     elif args.hex:
         messages.append(args.hex)
     else:
-        # 从标准输入读取
         stdin_data = sys.stdin.read().strip()
         if stdin_data:
             for line in stdin_data.splitlines():
@@ -118,19 +152,25 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    decoder = SL651Decoder()
     results = []
     errors = []
+
+    if args.protocol == "sl651":
+        decoder = SL651Decoder()
+        err_cls = SL651DecodeError
+    else:
+        decoder = SLT427Decoder()
+        err_cls = SLT427DecodeError
+
     for i, msg in enumerate(messages, 1):
         try:
             result = decoder.decode_hex(msg)
             results.append(result)
-        except DecodeError as e:
+        except err_cls as e:
             errors.append((i, msg, str(e)))
         except Exception as e:
             errors.append((i, msg, f"未知错误: {e}"))
 
-    # 输出
     if args.output == "json":
         output = {
             "total": len(messages),
@@ -141,8 +181,9 @@ def main() -> int:
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:
+        fmt_fn = format_sl651 if args.protocol == "sl651" else format_slt427
         for r in results:
-            print(format_text(r))
+            print(fmt_fn(r))
             print()
         if errors:
             print("=" * 72)

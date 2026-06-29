@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 
@@ -27,7 +28,7 @@ class WaterLevelGenerator:
     def next(self, tick: int = 0) -> float:
         """生成下一个水位值。tick 为时间步进。"""
         # 正弦日周期（24 小时 = 1440 分钟）
-        daily = self.amplitude * 0.5 * __import__("math").sin(2 * 3.1415926 * tick / 1440)
+        daily = self.amplitude * 0.5 * math.sin(2 * math.pi * tick / 1440)
         # 布朗运动
         self.current += random.gauss(0, self.noise)
         # 回归基准
@@ -127,9 +128,6 @@ class SoilMoistureGenerator:
 
         new_temps = []
         for i, t in enumerate(self.temps):
-            # 日周期波动
-            import math
-
             daily = 2 * math.sin(2 * math.pi * (i + 1) / 1440)
             t += random.gauss(0, 0.05) + daily * 0.001
             new_temps.append(round(t, 1))

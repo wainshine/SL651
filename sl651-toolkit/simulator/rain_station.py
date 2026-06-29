@@ -7,38 +7,22 @@ from .generators import RainGenerator, VoltageGenerator
 
 
 class RainStation(BaseStation):
-    """雨量站模拟器。
+    """雨量站。上报: 日降水量 + 1小时雨量 + 当前降水量 + 累计雨量 + 电池电压。"""
 
-    上报要素：
-    - 0010 日雨量累计值
-    - 0015 小时降雨量
-    - 0012 雨强
-    - 0800 电源电压
-    """
+    DEVICE_TYPE = "雨量站"
+    STATION_TYPE = 0x50  # 降水
 
-    DEVICE_TYPE = "rain"
-
-    def __init__(
-        self,
-        station_addr: str,
-        center_addr: str = "01",
-        password: str = "1234",
-    ) -> None:
-        super().__init__(station_addr, center_addr, password)
+    def __init__(self, station_addr: str) -> None:
+        super().__init__(station_addr)
         self.rain_gen = RainGenerator()
         self.voltage_gen = VoltageGenerator()
 
-    def generate_elements(self) -> list[tuple[str, object]]:
+    def generate_elements(self) -> list[tuple[int, float, int, int]]:
         daily, hourly, intensity = self.rain_gen.next(self.tick)
-        voltage = self.voltage_gen.next()
         return [
-            ("0010", daily),
-            ("0015", hourly),
-            ("0012", intensity),
-            ("0800", voltage),
+            (0x1F, daily, 3, 1),     # 日降水量
+            (0x1A, hourly, 3, 1),    # 1小时降雨量
+            (0x20, daily, 3, 1),     # 当前降水量（累计）
+            (0x26, daily, 3, 1),     # 累计雨量
+            (0x38, self.voltage_gen.next(), 2, 2),
         ]
-
-    @property
-    def is_raining(self) -> bool:
-        """当前是否在下雨（可用于触发加报）。"""
-        return self.rain_gen.raining

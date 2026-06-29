@@ -1,7 +1,4 @@
-"""SL651-2014 报文解码器。
-
-支持解析完整帧结构、提取报文头信息、解析要素数据。
-"""
+"""SL651-2014 报文解码器（基于 njnrs 实现重构）。"""
 
 from __future__ import annotations
 
@@ -12,99 +9,88 @@ from typing import Any
 from . import constants as C
 from .bcd import (
     bcd_bytes_to_int,
-    bcd_to_datetime,
-    bcd_to_int,
     bytes_to_hex,
     bytes_to_hex_compact,
+    safe_bcd_to_int,
 )
-from .crc import crc16, crc16_bytes
+from .crc import crc16
 
 
 @dataclass
 class ElementValue:
     """单个要素解析结果。"""
-
-    identifier: str  # 4 位十六进制字符串，如 "0040"
+    code: str
     name: str
+    value: Any
     unit: str
-    data_type: str
-    decimals: int
-    raw_value: Any  # 解析后的原始值（float/int/datetime/str）
-    raw_bytes: bytes  # 数据值原始字节
+    raw: str
+    data_type: str = "BCD"
+    byte_len: int = 0
+    decimal: int = 0
+    is_sub: bool = False
 
     @property
     def display_value(self) -> str:
-        """带单位的展示值。"""
-        if self.data_type == "float":
-            return f"{self.raw_value:.{self.decimals}f} {self.unit}".strip()
-        if self.data_type == "int":
-            return f"{self.raw_value} {self.unit}".strip()
-        if self.data_type == "datetime":
-            return self.raw_value.strftime("%Y-%m-%d %H:%M:%S")
-        if self.data_type == "datetime_range":
-            start, end = self.raw_value
-            return f"{start.strftime('%Y-%m-%d %H:%M:%S')} ~ {end.strftime('%Y-%m-%d %H:%M:%S')}"
-        return str(self.raw_value)
+        if isinstance(self.value, (int, float)):
+            return f"{self.value:.{self.decimal}f} {self.unit}".strip()
+        return f"{self.value} {self.unit}".strip()
 
 
 @dataclass
 class DecodedMessage:
     """SL651 报文解析结果。"""
-
-    # ===== 帧头信息 =====
-    center_station_addr: str  # 中心站地址（2 位十进制字符串）
-    remote_station_addr: str  # 遥测站地址（10 位十进制字符串）
-    password: str  # 密码（4 位十进制字符串）
-    function_code: int  # 功能码
-    function_desc: str  # 功能码描述
-    direction: int  # 上下行标志
-    direction_desc: str
-    message_type: str  # 报文类型（2 字符，如 "A1"）
-    message_type_desc: str
-    body_length: int  # 报文正文长度
-
-    # ===== 正文信息 =====
-    has_time: bool  # 是否带时间
-    body_time: datetime | None  # 正文时间（若带）
+    hex_input: str = ""
+    center_addr: str = ""
+    station_addr: str = ""
+    password: str = ""
+    function_code: int = 0
+    function_name: str = ""
+    direction: int = 0
+    direction_label: str = ""
+    body_length: int = 0
+    serial: str = ""
+    tx_time: str = ""
+    tx_time_display: str = ""
+    station_type: str = ""
+    station_type_name: str = ""
+    obs_time: str = ""
+    obs_time_display: str = ""
+    is_uniform: bool = False
+    encoding: str = "BCD"
+    crc_received: int = 0
+    crc_calculated: int = 0
+    crc_ok: bool = True
     elements: list[ElementValue] = field(default_factory=list)
-
-    # ===== 原始数据 =====
-    raw_frame: bytes = b""  # 完整原始帧
-    header_bytes: bytes = b""  # 帧头字节
-    body_bytes: bytes = b""  # 正文字节
-    crc_received: int = 0  # 接收到的 CRC
-    crc_calculated: int = 0  # 计算得到的 CRC
-    crc_ok: bool = True  # CRC 校验是否通过
+    byte_map: str = ""
+    byte_table: list[dict] = field(default_factory=list)
+    raw_frame: bytes = b""
+    frame_length: int = 0
+    message_type: str = ""  # 从功能码推导的报文类型，如 "定时报"、"加报报"
 
     def to_dict(self) -> dict:
-        """转为字典（便于序列化）。"""
         return {
-            "center_station_addr": self.center_station_addr,
-            "remote_station_addr": self.remote_station_addr,
+            "center_addr": self.center_addr,
+            "station_addr": self.station_addr,
             "password": self.password,
             "function_code": f"0x{self.function_code:02X}",
-            "function_desc": self.function_desc,
-            "direction": self.direction_desc,
+            "function_name": self.function_name,
             "message_type": self.message_type,
-            "message_type_desc": self.message_type_desc,
+            "direction": self.direction_label,
             "body_length": self.body_length,
-            "has_time": self.has_time,
-            "body_time": self.body_time.strftime("%Y-%m-%d %H:%M:%S") if self.body_time else None,
-            "elements": [
-                {
-                    "identifier": el.identifier,
-                    "name": el.name,
-                    "unit": el.unit,
-                    "value": el.display_value,
-                    "raw_value": el.raw_value,
-                    "raw_hex": bytes_to_hex_compact(el.raw_bytes),
-                }
-                for el in self.elements
-            ],
+            "serial": self.serial,
+            "tx_time": self.tx_time_display,
+            "station_type": self.station_type_name,
+            "obs_time": self.obs_time_display,
+            "encoding": self.encoding,
             "crc_ok": self.crc_ok,
             "crc_received": f"0x{self.crc_received:04X}",
             "crc_calculated": f"0x{self.crc_calculated:04X}",
-            "raw_frame_hex": bytes_to_hex_compact(self.raw_frame),
+            "elements": [
+                {"code": el.code, "name": el.name, "value": el.display_value,
+                 "unit": el.unit, "raw": el.raw, "data_type": el.data_type}
+                for el in self.elements
+            ],
+            "frame_length": self.frame_length,
         }
 
 
@@ -112,206 +98,408 @@ class DecodeError(Exception):
     """解码异常。"""
 
 
+def _fmt_bcd_time_sec(hex_str: str) -> str:
+    try:
+        v = bcd_bytes_to_int(bytes.fromhex(hex_str))
+        s = f"{v:012d}"
+        return f"20{s[0:2]}-{s[2:4]}-{s[4:6]} {s[6:8]}:{s[8:10]}:{s[10:12]}"
+    except (ValueError, IndexError):
+        return hex_str
+
+
+def _fmt_bcd_time_nosec(hex_str: str) -> str:
+    try:
+        v = bcd_bytes_to_int(bytes.fromhex(hex_str))
+        s = f"{v:010d}"
+        return f"20{s[0:2]}-{s[2:4]}-{s[4:6]} {s[6:8]}:{s[8:10]}"
+    except (ValueError, IndexError):
+        return hex_str
+
+
+def _safe_bcd_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
+    """安全 BCD 解码，无效数据返回 '-'。负数时剥离 0xFF 前缀。"""
+    c = hex_str.upper()
+    if all(ch == "F" for ch in c) or (not c):
+        return ("-", c)
+    if neg:
+        c = c[2:]  # strip FF prefix
+    if not c:
+        return ("-", c)
+    try:
+        v = bcd_bytes_to_int(bytes.fromhex(c))
+    except ValueError:
+        return ("-", c)
+    d = 10 ** decimals
+    r = (-1 if neg else 1) * v / d
+    return (f"{r:.{decimals}f}", hex_str.upper())
+
+
+def _safe_hex_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
+    """安全 HEX 解码。"""
+    c = hex_str.upper()
+    if all(ch == "F" for ch in c) or (not c):
+        return ("-", c)
+    if neg:
+        c = c[2:]
+    if not c:
+        return ("-", c)
+    try:
+        v = int(c, 16)
+    except ValueError:
+        return ("-", c)
+    d = 10 ** decimals
+    r = (-1 if neg else 1) * v / d
+    return (f"{r:.{decimals}f}", hex_str.upper())
+
+
+def _build_byte_map(bytes_list: list[int], direction: int, etx_pos: int) -> str:
+    lines = []
+    for offset in range(0, len(bytes_list), 16):
+        chunk = bytes_list[offset: offset + 16]
+        parts = []
+        for i, b in enumerate(chunk):
+            h = f"{b:02X}"
+            idx = offset + i
+            if offset == 0 and i < 2:
+                h = f"*{h}*"
+            elif offset == 2 and i == 0:
+                h = f"[{h}]"
+            elif offset == 13 and i == 0:
+                h = f"<{h}>"
+            elif idx == etx_pos:
+                h = f"<{h}>"
+            elif idx > etx_pos:
+                h = f"*{h}*"
+            elif direction == 0 and 22 <= offset <= 23 and idx < 24:
+                h = f"<{h}>"
+            elif direction == 0 and 30 <= offset <= 31 and idx < 32:
+                h = f"<{h}>"
+            parts.append(h)
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
+def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int) -> list[dict]:
+    fields = [
+        (0, 1, "帧起始符 7E7E"),
+        (2, 2, "中心站址"),
+    ]
+    if direction == 0:
+        fields += [
+            (3, 7, "遥测站地址(5字节)"),
+            (8, 9, "密码"),
+            (10, 10, "功能码"),
+            (11, 12, "报文标识(方向+长度)"),
+            (13, 13, "STX(02)"),
+            (14, 15, "流水号"),
+            (16, 21, "发报时间(BCD 6B)"),
+            (22, 23, "站码标识 F1F1"),
+            (24, 28, "站码(5字节)"),
+            (29, 29, "测站类别"),
+            (30, 31, "观测时间标识 F0F0"),
+            (32, 36, "观测时间(BCD 5B)"),
+            (37, etx_pos - 1, "水文要素数据"),
+        ]
+    else:
+        fields += [
+            (3, 7, "目标站码(5字节)"),
+            (8, 9, "密码"),
+            (10, 10, "功能码"),
+            (11, 12, "报文标识"),
+            (13, 13, "STX(02)"),
+            (14, 15, "流水号"),
+            (16, 21, "发报时间(BCD 6B)"),
+            (22, etx_pos - 1, "响应数据"),
+        ]
+    fields.append((etx_pos, etx_pos, f"ETX({bytes_list[etx_pos]:02X})"))
+    fields.append((etx_pos + 1, etx_pos + 2, "CRC16"))
+    result = []
+    for s, e, name in fields:
+        s = min(s, len(bytes_list) - 1)
+        e = min(e, len(bytes_list) - 1)
+        if s > e:
+            continue
+        result.append({
+            "offset": f"{s:02X}-{e:02X}",
+            "hex": bytes_to_hex(bytes(bytes_list[s: e + 1])),
+            "field": name,
+        })
+    return result
+
+
 class SL651Decoder:
-    """SL651 报文解码器。
-
-    用法::
-
-        decoder = SL651Decoder()
-        result = decoder.decode_hex("7E ... 7E")
-        print(result.to_dict())
-    """
+    """SL651 报文解码器。"""
 
     def decode_hex(self, hex_str: str) -> DecodedMessage:
-        """解析十六进制字符串形式的报文。"""
-        from .bcd import hex_str_to_bytes
-
-        return self.decode(hex_str_to_bytes(hex_str))
+        cleaned = "".join(hex_str.split())
+        if not cleaned:
+            raise DecodeError("报文为空")
+        if any(c not in "0123456789ABCDEFabcdef" for c in cleaned):
+            raise DecodeError("报文包含非十六进制字符")
+        if len(cleaned) % 2 != 0:
+            raise DecodeError("报文长度不是偶数")
+        if cleaned[:4].upper() != "7E7E":
+            raise DecodeError("报文不是以 7E7E 开头")
+        return self.decode(bytes.fromhex(cleaned))
 
     def decode(self, frame: bytes) -> DecodedMessage:
-        """解析 bytes 形式的报文。
+        if len(frame) < C.BODY_OFFSET + 4:
+            raise DecodeError(f"报文太短: {len(frame)} 字节")
 
-        支持两种输入：
-        1. 包含起始符和结束符的完整帧：``7E ... 7E``
-        2. 不含起止符的裸帧（从中心站地址开始）
-        """
-        if not frame:
-            raise DecodeError("报文为空")
+        bytes_list = list(frame)
+        total = len(bytes_list)
+        center = bytes_list[2]
+        reserved = bytes_list[3:8]
+        pwd = bytes_list[8:10]
+        func = bytes_list[10]
+        ident_hi = bytes_list[11]
+        ident_lo = bytes_list[12]
+        direction = (ident_hi >> 7) & 1
+        body_len = ((ident_hi & 0x7F) << 8) | ident_lo
+        stx = bytes_list[C.STX_OFFSET]
 
-        # 处理起止符
-        has_delimiters = frame[0] == C.START_END
-        if has_delimiters:
-            if frame[-1] != C.START_END:
-                raise DecodeError("报文以 0x7E 起始但未以 0x7E 结束")
-            if len(frame) < C.HEADER_LEN + 4:  # 起止符2 + CRC2 + 至少1字节正文
-                raise DecodeError(f"报文长度不足: {len(frame)} 字节")
-            payload = frame[1:-1]  # 去掉起止符
+        if stx != C.STX:
+            raise DecodeError(f"STX 应为 02H，实际 {stx:02X}H")
+
+        serial = bytes_list[C.BODY_OFFSET:C.BODY_OFFSET + C.SERIAL_LEN]
+        tx_time_bytes = bytes(bytes_list[C.BODY_OFFSET + C.SERIAL_LEN:
+                                         C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN])
+        etx_pos = C.BODY_OFFSET + body_len
+
+        if etx_pos + 2 >= total:
+            raise DecodeError(f"正文长度 {body_len} 与总长 {total} 不匹配")
+
+        crc_data = bytes(bytes_list[:etx_pos + 1])
+        calc_crc = crc16(crc_data)
+        recv_crc = (bytes_list[etx_pos + 1] << 8) | bytes_list[etx_pos + 2]
+
+        func_name = C.FUNC_MAP.get(func, f"未知(0x{func:02X})")
+        is_uniform = func == 0x31
+        encoding = "HEX" if is_uniform else "BCD"
+        direction_label = "上行（遥测站→中心站）" if direction == 0 else "下行（中心站→遥测站）"
+
+        stn_code = b""
+        stn_type = 0
+        stn_type_hex = ""
+        stn_type_name = ""
+        obs_time_bytes = b""
+
+        if direction == 0:
+            f1_check = bytes_list[C.F1_OFFSET:C.F1_OFFSET + 2]
+            if f1_check[0] != 0xF1 or f1_check[1] != 0xF1:
+                raise DecodeError("上行报文站码标识应为 F1F1")
+            f0_check = bytes_list[C.F0_OFFSET:C.F0_OFFSET + 2]
+            if f0_check[0] != 0xF0 or f0_check[1] != 0xF0:
+                raise DecodeError("上行报文观测时间标识应为 F0F0")
+            stn_code = bytes(bytes_list[C.STN_CODE_OFFSET:C.STN_CODE_OFFSET + 5])
+            stn_type = bytes_list[C.STN_TYPE_OFFSET]
+            stn_type_hex = f"{stn_type:02X}"
+            stn_type_name = C.STATION_TYPE.get(stn_type, "未知")
+            obs_time_bytes = bytes(bytes_list[C.OBS_TIME_OFFSET:
+                                               C.OBS_TIME_OFFSET + C.OBS_TIME_LEN])
         else:
-            if len(frame) < C.HEADER_LEN + 2:  # CRC2 + 至少1字节正文
-                raise DecodeError(f"裸帧长度不足: {len(frame)} 字节")
-            payload = frame
+            stn_code = bytes(reserved)
+            obs_time_bytes = b"\x00" * C.OBS_TIME_LEN
 
-        # 解析帧头
-        header = payload[: C.HEADER_LEN]
-        body_with_crc = payload[C.HEADER_LEN :]
-        if len(body_with_crc) < 2:
-            raise DecodeError("报文正文 + CRC 长度不足")
+        station_addr = bytes_to_hex_compact(stn_code) if stn_code else ""
+        obs_hex = bytes_to_hex_compact(obs_time_bytes) if obs_time_bytes else ""
+        tx_hex = bytes_to_hex_compact(tx_time_bytes)
+        pwd_hex = bytes_to_hex_compact(bytes(pwd))
+        serial_hex = bytes_to_hex_compact(bytes(serial))
 
-        # CRC 校验：计算范围 = 帧头 + 报文正文（不含 CRC 自身）
-        body = body_with_crc[:-2]
-        crc_received = int.from_bytes(body_with_crc[-2:], "big")
-        crc_calculated = crc16(header + body)
-        crc_ok = crc_received == crc_calculated
+        obs_display = _fmt_bcd_time_nosec(obs_hex) if obs_hex else ""
+        tx_display = _fmt_bcd_time_sec(tx_hex)
 
-        # 解析帧头各字段
-        center_addr = f"{bcd_to_int(header[0]):02d}"
-        remote_addr = "".join(f"{bcd_to_int(b):02d}" for b in header[1:6])
-        password = "".join(f"{bcd_to_int(b):02d}" for b in header[6:8])
-        function_code = header[8]
-        direction = header[9]
-        # 报文类型为 1 字节 BCD，转成 "A1" 形式
-        mt_hi = (header[10] >> 4) & 0x0F
-        mt_lo = header[10] & 0x0F
-        message_type = f"{mt_hi:X}{mt_lo:X}"
-        body_length = bcd_bytes_to_int(header[11:13])
+        data_start = C.UPLINK_DATA_OFFSET if direction == 0 else C.DOWNLINK_DATA_OFFSET
+        data_bytes = bytes(bytes_list[data_start:etx_pos])
+        elements = self._parse_elements(data_bytes)
 
-        function_desc = C.FUNCTION_CODES.get(function_code, f"未知功能码 0x{function_code:02X}")
-        direction_desc = "上行（遥测站→中心站）" if direction == C.DIR_UPSTREAM else "下行（中心站→遥测站）"
-        message_type_desc = C.MESSAGE_TYPES.get(message_type, "未知报文类型")
-
-        # 解析正文
-        has_time, body_time, elements = self._parse_body(body)
+        byte_map = _build_byte_map(bytes_list, direction, etx_pos)
+        byte_table = _build_byte_table(bytes_list, direction, etx_pos)
 
         return DecodedMessage(
-            center_station_addr=center_addr,
-            remote_station_addr=remote_addr,
-            password=password,
-            function_code=function_code,
-            function_desc=function_desc,
+            hex_input=bytes_to_hex_compact(frame),
+            center_addr=f"{center:02X}",
+            station_addr=station_addr,
+            password=pwd_hex,
+            function_code=func,
+            function_name=func_name,
+            message_type=func_name,
             direction=direction,
-            direction_desc=direction_desc,
-            message_type=message_type,
-            message_type_desc=message_type_desc,
-            body_length=body_length,
-            has_time=has_time,
-            body_time=body_time,
+            direction_label=direction_label,
+            body_length=body_len,
+            serial=serial_hex,
+            tx_time=tx_hex,
+            tx_time_display=tx_display,
+            station_type=stn_type_hex,
+            station_type_name=stn_type_name,
+            obs_time=obs_hex,
+            obs_time_display=obs_display,
+            is_uniform=is_uniform,
+            encoding=encoding,
+            crc_received=recv_crc,
+            crc_calculated=calc_crc,
+            crc_ok=calc_crc == recv_crc,
             elements=elements,
+            byte_map=byte_map,
+            byte_table=byte_table,
             raw_frame=frame,
-            header_bytes=header,
-            body_bytes=body,
-            crc_received=crc_received,
-            crc_calculated=crc_calculated,
-            crc_ok=crc_ok,
+            frame_length=total,
         )
 
-    def _parse_body(self, body: bytes) -> tuple[bool, datetime | None, list[ElementValue]]:
-        """解析报文正文。
-
-        返回 (是否带时间, 时间, 要素列表)。
-        """
-        if not body:
-            return False, None, []
-
-        pos = 0
-        time_flag = body[pos]
-        pos += 1
-        has_time = bool(time_flag & C.TIME_FLAG_WITH_TIME)
-
-        body_time: datetime | None = None
-        if has_time:
-            if len(body) < pos + 6:
-                raise DecodeError("报文标记带时间但时间字段不足 6 字节")
-            body_time = bcd_to_datetime(body[pos : pos + 6])
-            pos += 6
-
+    def _parse_elements(self, data: bytes) -> list[ElementValue]:
+        if not data:
+            return []
+        hex_str = bytes_to_hex_compact(data).lower()
         elements: list[ElementValue] = []
-        # 逐个解析要素，直到正文结束
-        while pos < len(body):
-            if pos + 2 > len(body):
-                break
-            # 要素标识符 2 字节 BCD -> 4 位十六进制字符串
-            id_hi = body[pos]
-            id_lo = body[pos + 1]
-            identifier = f"{id_hi:02X}{id_lo:02X}"
+        pos = 0
+
+        while pos + 4 <= len(hex_str):
+            code = hex_str[pos:pos + 2]
             pos += 2
+            def_hex = hex_str[pos:pos + 2]
+            pos += 2
+            def_byte = int(def_hex, 16)
+            d_len, d_dec = C.parse_def_byte(def_byte)
 
-            element_def = C.ELEMENT_IDENTIFIERS.get(identifier)
-            if element_def is None:
-                # 未知要素，按剩余字节全部读取并停止
-                raw = body[pos:]
-                elements.append(
-                    ElementValue(
-                        identifier=identifier,
-                        name=f"未知要素({identifier})",
-                        unit="-",
-                        data_type="unknown",
-                        decimals=0,
-                        raw_value=bytes_to_hex_compact(raw),
-                        raw_bytes=raw,
-                    )
-                )
+            if code == "80":
+                elements.append(self._parse_80(def_byte, hex_str, pos, d_len))
+                pos += d_len * 2
+                continue
+
+            if code == "f0" and def_hex == "f0":
+                pos += min(10, len(hex_str) - pos)
+                continue
+            if code == "f1" and def_hex == "f1":
+                pos += min(10, len(hex_str) - pos)
+                continue
+
+            is_cust = False
+            f_len, f_dec = d_len, d_dec
+
+            if code == "ff":
+                if pos + 2 > len(hex_str):
+                    break
+                sub = def_hex
+                next_def = hex_str[pos:pos + 2]
+                pos += 2
+                ndb = int(next_def, 16)
+                f_len = (ndb >> 3) & 0x1F
+                f_dec = ndb & 0x07
+                code = "ff" + sub
+                is_cust = True
+
+            need_chars = f_len * 2
+            if pos + need_chars > len(hex_str):
+                break
+            raw_hex = hex_str[pos:pos + need_chars]
+            pos += need_chars
+            if not raw_hex:
                 break
 
-            name, unit, data_type, decimals, data_len = element_def
-            if pos + data_len > len(body):
-                raise DecodeError(
-                    f"要素 {identifier}({name}) 数据长度 {data_len} 超出剩余正文长度 {len(body) - pos}"
-                )
-            raw_bytes = body[pos : pos + data_len]
-            pos += data_len
+            is_neg = raw_hex[:2] == "ff" and f_len > 1
+            entry = C.SL651_CUSTOM.get(code[2:]) if is_cust else C.SL651_ELEMENTS.get(code)
+            desc = entry[0] if entry else f"未知({code.upper()})"
+            unit = entry[1] if entry else ""
+            dt = entry[2] if entry else None
 
-            value = self._parse_element_value(data_type, decimals, raw_bytes)
-            elements.append(
-                ElementValue(
-                    identifier=identifier,
-                    name=name,
-                    unit=unit,
-                    data_type=data_type,
-                    decimals=decimals,
-                    raw_value=value,
-                    raw_bytes=raw_bytes,
-                )
-            )
+            if dt == "STATUS":
+                elements.extend(self._parse_status(raw_hex, f_len))
+            elif dt == "F4_ARRAY":
+                elements.extend(self._parse_f4_array(raw_hex, f_len))
+            elif dt == "F5_ARRAY":
+                elements.extend(self._parse_f5_array(raw_hex, f_len, code))
+            elif dt == "Hex":
+                pv = _safe_hex_val(raw_hex, f_dec, is_neg)
+                elements.append(ElementValue(
+                    code=code.upper(), name=desc, value=pv[0], unit=unit,
+                    raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
+                ))
+            else:
+                pv = _safe_bcd_val(raw_hex, f_dec, is_neg)
+                elements.append(ElementValue(
+                    code=code.upper(), name=desc, value=pv[0], unit=unit,
+                    raw=pv[1], data_type="BCD", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
+                ))
 
-        return has_time, body_time, elements
+        return elements
 
     @staticmethod
-    def _parse_element_value(data_type: str, decimals: int, raw: bytes) -> Any:
-        """根据数据类型解析单个要素的值。"""
-        if data_type == "float":
-            # BCD 编码，最高字节最高位为 1 表示负数
-            negative = bool(raw[0] & 0x80)
-            sanitized = bytes([(raw[0] & 0x7F)] + list(raw[1:]))
-            int_val = bcd_bytes_to_int(sanitized)
-            float_val = int_val / (10 ** decimals) if decimals > 0 else float(int_val)
-            return -float_val if negative else float_val
+    def _parse_80(def_byte: int, hex_str: str, pos: int, d_len: int) -> ElementValue:
+        d_dec = def_byte & 0x07
+        need = d_len * 2
+        if pos + need > len(hex_str):
+            return ElementValue(code="80", name="4G信号强度", value="-", unit="dBm",
+                                raw=hex_str[pos:pos + need].upper(), data_type="BCD")
+        raw_hex = hex_str[pos:pos + need]
+        pv = _safe_bcd_val(raw_hex, d_dec, False)
+        return ElementValue(
+            code="80", name="4G信号强度", value=pv[0], unit="dBm", raw=pv[1],
+            data_type="BCD", byte_len=d_len, decimal=d_dec,
+        )
 
-        if data_type == "int":
-            negative = bool(raw[0] & 0x80)
-            sanitized = bytes([(raw[0] & 0x7F)] + list(raw[1:]))
-            int_val = bcd_bytes_to_int(sanitized)
-            return -int_val if negative else int_val
+    @staticmethod
+    def _parse_status(raw_hex: str, f_len: int) -> list[ElementValue]:
+        try:
+            sv = int(raw_hex, 16)
+        except ValueError:
+            return [ElementValue(code="45", name="状态报警", value="-", unit="",
+                                 raw=raw_hex.upper(), data_type="STATUS", byte_len=f_len)]
+        elements = []
+        for i in range(12):
+            bit = (sv >> i) & 1
+            desc = C.STATUS_BITS[i] if i < len(C.STATUS_BITS) else f"BIT{i}"
+            val = C.STATUS_1[i] if bit else C.STATUS_0[i]
+            elements.append(ElementValue(
+                code=f"BIT{i}", name=desc, value=val, unit="",
+                raw=raw_hex.upper(), data_type="STATUS", byte_len=f_len,
+            ))
+        return elements
 
-        if data_type == "datetime":
-            return bcd_to_datetime(raw)
+    @staticmethod
+    def _parse_f4_array(raw_hex: str, f_len: int) -> list[ElementValue]:
+        elements = []
+        for i in range(min(f_len, 12)):
+            if i * 2 + 2 > len(raw_hex):
+                break
+            bh = raw_hex[i * 2:i * 2 + 2]
+            try:
+                bv = int(bh, 16)
+            except ValueError:
+                val = "-"
+            else:
+                val = "-" if bv == 0xFF else f"{bv / 10:.1f}"
+            elements.append(ElementValue(
+                code="F4", name=f"第{i + 1}时段({i * 5}min)雨量",
+                value=val, unit="mm", raw=bh.upper(),
+                data_type="F4_ARRAY", byte_len=1, decimal=1,
+            ))
+        return elements
 
-        if data_type == "datetime_range":
-            start = bcd_to_datetime(raw[:6])
-            end = bcd_to_datetime(raw[6:12])
-            return (start, end)
-
-        if data_type == "string":
-            # 字符串以 ASCII 字符填充，去除尾部 0x00 / 0xFF
-            return raw.rstrip(b"\x00\xff").decode("ascii", errors="replace")
-
-        return bytes_to_hex_compact(raw)
+    @staticmethod
+    def _parse_f5_array(raw_hex: str, f_len: int, code: str) -> list[ElementValue]:
+        elements = []
+        for i in range(0, min(f_len, 24), 2):
+            if i * 2 + 4 > len(raw_hex):
+                break
+            pair = raw_hex[i * 2:i * 2 + 4]
+            try:
+                pv = int(pair, 16)
+            except ValueError:
+                val = "-"
+            else:
+                val = "-" if pv == 0xFFFF else f"{pv / 100:.2f}"
+            elements.append(ElementValue(
+                code=code.upper(), name=f"第{i // 2 + 1}时段({i // 2 * 5}min)水位",
+                value=val, unit="m", raw=pair.upper(),
+                data_type="F5_ARRAY", byte_len=2, decimal=2,
+            ))
+        return elements
 
 
 def decode_hex(hex_str: str) -> DecodedMessage:
-    """便捷函数：解析十六进制字符串报文。"""
     return SL651Decoder().decode_hex(hex_str)
 
 
 def decode(frame: bytes) -> DecodedMessage:
-    """便捷函数：解析 bytes 报文。"""
     return SL651Decoder().decode(frame)

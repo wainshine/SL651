@@ -1,45 +1,27 @@
 # SL651 设备模拟器 - 多站点配置示例
-# 启动方式: python tools/simulate_cli.py --config examples/stations.yaml --mqtt-host 127.0.0.1
+# 启动方式: python tools/simulate_cli.py --config examples/stations.yaml
 
-mqtt:
-  host: 127.0.0.1
-  port: 1883
-  username: ""
-  password: ""
-  topic_template: "sl651/{station_addr}/uplink"
-  publish_hex_also: true
+sender:
+  proto: mqtt
+  broker: 127.0.0.1:1883
+  topic: "sl651/{station_addr}/uplink"
 
 stations:
-  # 水位站 - 每 60 秒上报一次
   - type: water_level
     addr: "0000000001"
-    center: "01"
-    password: "1234"
+    center: 1
+    password: 0
     interval: 60
     base_level: 5.0
-    enable_a2_alert: false
 
-  # 雨量站 - 每 60 秒上报，下雨时触发加报
   - type: rain
     addr: "0000000002"
-    center: "01"
-    password: "1234"
+    center: 1
+    password: 0
     interval: 60
-    enable_a2_alert: true
 
-  # 墒情站 - 每 300 秒上报一次
   - type: soil
     addr: "0000000003"
-    center: "01"
-    password: "1234"
+    center: 1
+    password: 0
     interval: 300
-    enable_a2_alert: false
-
-  # 另一个水位站 - 模拟水库高水位
-  - type: water_level
-    addr: "0000000010"
-    center: "01"
-    password: "1234"
-    interval: 60
-    base_level: 85.5
-    enable_a2_alert: false
