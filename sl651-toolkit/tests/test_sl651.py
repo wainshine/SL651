@@ -236,23 +236,23 @@ def test_sl651_downlink_frames() -> None:
     print(">>> SL651 下行帧编码")
     encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
     decoder = SL651Decoder()
-    # 查询帧
+    # 查询帧 (0x37)
     f = encoder.build_query_frame([0x39, 0x38])
     r = decoder.decode(f)
-    assert r.crc_ok and r.function_code == 0x09
+    assert r.crc_ok and r.function_code == 0x37
     assert r.direction == 1
-    # 设置帧
+    # 设置帧 (0x40)
     f = encoder.build_set_param_frame([(0x39, 12.345, 4, 3)])
     r = decoder.decode(f)
-    assert r.crc_ok and r.function_code == 0x08
-    # 校时帧
+    assert r.crc_ok and r.function_code == 0x40
+    # 校时帧 (0x4A)
     f = encoder.build_clock_sync_frame(datetime(2025, 6, 1, 12, 0, 0))
     r = decoder.decode(f)
-    assert r.crc_ok and r.function_code == 0x0C
-    # 复位帧
+    assert r.crc_ok and r.function_code == 0x4A
+    # 恢复出厂 (0x48)
     f = encoder.build_reset_frame()
     r = decoder.decode(f)
-    assert r.crc_ok and r.function_code == 0x0D
+    assert r.crc_ok and r.function_code == 0x48
     print("    OK")
 
 
@@ -300,6 +300,34 @@ def test_sl651_ascii() -> None:
     print("    OK")
 
 
+def test_fujian_messages() -> None:
+    print(">>> 福建规定示例报文")
+    sample_file = PROJECT_ROOT / "examples" / "fujian_messages.txt"
+    if not sample_file.exists():
+        print("    跳过（fujian_messages.txt 不存在）")
+        return
+    from sl651 import SL651Decoder
+    decoder = SL651Decoder()
+    success = 0
+    failed = 0
+    for line in sample_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            r = decoder.decode_hex(line)
+            if r.crc_ok:
+                success += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+    print(f"    {success} 通过, {failed} 失败")
+    assert failed == 0, f"有 {failed} 条福建报文解码失败"
+    assert success >= 20, f"至少 20 条, 实际 {success}"
+    print("    OK")
+
+
 def test_negative_bcd() -> None:
     print(">>> 负数 BCD 编解码")
     encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
@@ -341,6 +369,7 @@ def main() -> int:
         test_sl427_address_encoding, test_sl427_tp_encoding,
         test_sl427_c0_signed_value, test_sl427_invalid_l, test_sl427_downlink,
         test_sl651_downlink_frames, test_sl427_param_settings, test_sl651_ascii,
+        test_fujian_messages,
         test_negative_bcd, test_invalid_bcd_graceful,
     ]
     for test in tests:

@@ -219,12 +219,18 @@ class SL427Encoder:
         return self.build_param_set_frame(0x10, 0x00, new_addr_bytes, pw)
 
     def build_set_clock(self, dt: datetime | None = None, pw: int = 0) -> bytes:
-        """设置时钟 (AFN=11H)。6B BCD: 秒分时日月年星期。"""
+        """设置时钟 (AFN=11H)。6B BCD: 秒分时日月(星期)年。
+        
+        第5字节 D5~D7=星期(1=周一~7=周日), D4~D0=月。
+        """
         if dt is None:
             dt = datetime.now()
+        wd = dt.weekday() + 1  # Python weekday: 0=周一
+        week_month = ((wd & 0x07) << 5) | (dt.month & 0x1F)
         data = bytes([_bcd_byte(dt.second), _bcd_byte(dt.minute),
                        _bcd_byte(dt.hour), _bcd_byte(dt.day),
-                       _bcd_byte(dt.month), _bcd_byte(dt.year - 2000)])
+                       week_month,
+                       _bcd_byte(dt.year - 2000)])
         return self.build_param_set_frame(0x11, 0x00, data, pw)
 
     def build_set_work_mode(self, mode: int, pw: int = 0) -> bytes:

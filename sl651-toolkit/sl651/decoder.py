@@ -387,10 +387,10 @@ class SL651Decoder:
                 continue
 
             if code == "f0" and def_hex == "f0":
-                pos += min(10, len(hex_str) - pos)
+                pos += 12  # F1F1信息组=标识(2B)+站址(5B)+分类(1B), 已读2B标识, 跳6B
                 continue
             if code == "f1" and def_hex == "f1":
-                pos += min(10, len(hex_str) - pos)
+                pos += 12
                 continue
 
             is_cust = False

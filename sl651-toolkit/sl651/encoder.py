@@ -225,8 +225,8 @@ class SL651Encoder:
         return bytes(body)
 
     def build_query_frame(self, element_guides: list[int]) -> bytes:
-        """查询要素帧（下行）。"""
-        return self.build_frame(0x09, self.build_query_body(element_guides), direction=C.DIR_DOWNLINK)
+        """查询要素帧（下行，0x37）。"""
+        return self.build_frame(0x37, self.build_query_body(element_guides), direction=C.DIR_DOWNLINK)
 
     def build_set_param_body(self, params: list[tuple[int, float, int, int]]) -> bytes:
         """参数设置正文：引导符+定义符+数据值。"""
@@ -238,8 +238,8 @@ class SL651Encoder:
         return bytes(body)
 
     def build_set_param_frame(self, params: list[tuple[int, float, int, int]]) -> bytes:
-        """参数设置帧（下行）。"""
-        return self.build_frame(0x08, self.build_set_param_body(params), direction=C.DIR_DOWNLINK)
+        """参数设置帧（下行，0x40 修改基本配置表）。"""
+        return self.build_frame(0x40, self.build_set_param_body(params), direction=C.DIR_DOWNLINK)
 
     def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
         """时钟校准正文：6 字节 BCD 时间。"""
@@ -248,16 +248,16 @@ class SL651Encoder:
         return datetime_to_bcd(dt)
 
     def build_clock_sync_frame(self, dt: datetime | None = None) -> bytes:
-        """时钟校准帧 (0x0C, 下行)。"""
-        return self.build_frame(0x0C, self.build_clock_sync_body(dt), direction=C.DIR_DOWNLINK)
+        """时钟校准帧 (0x4A, 下行)。"""
+        return self.build_frame(0x4A, self.build_clock_sync_body(dt), direction=C.DIR_DOWNLINK)
 
     def build_reset_body(self) -> bytes:
         """复位帧正文：空。"""
         return b""
 
     def build_reset_frame(self) -> bytes:
-        """复位帧 (0x0D, 下行)。"""
-        return self.build_frame(0x0D, self.build_reset_body(), direction=C.DIR_DOWNLINK)
+        """恢复出厂设置帧 (0x48, 下行)。"""
+        return self.build_frame(0x48, self.build_reset_body(), direction=C.DIR_DOWNLINK)
 
     # ------------------------------------------------------------------
     # ASCⅡ 编码
