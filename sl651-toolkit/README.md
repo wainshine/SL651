@@ -2,7 +2,7 @@
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
-**两大核心能力**：报文解码 + 设备模拟。
+**两大核心能力**：报文解码 + 设备模拟。**支持 HEX/BCD 和 ASCII 两种编码**，**上行/下行全功能编解码**。
 
 ---
 
@@ -13,27 +13,34 @@ sl651-toolkit/
 ├── sl651/                      # SL651 协议核心
 │   ├── bcd.py                  # BCD 编解码
 │   ├── crc.py                  # CRC-16/MODBUS + CRC8
-│   ├── constants.py            # 101 要素表、FF 子标识符、定义符、帧结构常量
-│   ├── decoder.py              # 解码器（定义符动态解析）
-│   └── encoder.py              # 编码器
-├── sl427/                     # SL427 协议核心
-│   ├── constants.py            # 控制功能码、AFN 表、告警位
-│   ├── decoder.py              # 68H 帧解析器
-│   └── encoder.py              # 68H 帧编码器
+│   ├── constants.py            # 101 要素表、FF 子标识符、ASCII 标识符表、帧结构常量
+│   ├── decoder.py              # 解码器（HEX/BCD + ASCII，定义符动态解析）
+│   └── encoder.py              # 编码器（上行 6 类 + 下行 4 类 + ASCII 编码）
+├── sl427/                      # SL427 协议核心
+│   ├── constants.py            # 控制功能码(16 种)、AFN 表(32 个)、告警/终端状态
+│   ├── decoder.py              # 68H 帧解析器（含 AUX 分离）
+│   └── encoder.py              # 68H 帧编码器（自报 5 类 + 参数设置 6 类 + 通用模板）
 ├── simulator/                  # 设备模拟器
 │   ├── base_station.py         # 站点基类
 │   ├── generators.py           # 水位/雨量/墒情数据生成器
-│   ├── water_level_station.py  # 水位站
-│   ├── rain_station.py         # 雨量站
+│   ├── water_level_station.py  # 水位站（N(7,3)精度）
+│   ├── rain_station.py         # 雨量站（含加报触发）
 │   ├── soil_station.py         # 墒情站
-│   ├── sender.py               # MqttxSender（mqttx CLI）+ TcpSender（TCP socket）
-│   └── engine.py               # 定时循环引擎
+│   ├── sender.py               # MqttxSender + TcpSender（重连）
+│   └── engine.py               # 定时循环引擎（含加报机制）
 ├── tools/
-│   ├── decode_cli.py           # 解码 CLI（sl651 / sl427 双协议）
-│   └── simulate_cli.py         # 模拟器 CLI
+│   ├── decode_cli.py           # 解码 CLI（sl651 / sl427 双协议，text/json 输出）
+│   └── simulate_cli.py         # 模拟器 CLI（mqtt/tcp 双通道，YAML 多站点）
+├── web/
+│   └── app.py                  # Flask Web 解码界面（单文件部署）
 ├── examples/
-│   ├── stations.yaml           # 多站点配置
-│   ├── fujian_messages.txt      # 福建规定 23 条真实报文
+│   ├── sample_messages.txt     # 基础示例报文
+│   ├── fujian_messages.txt     # 福建规定 23 条真实报文
+│   └── stations.yaml           # 多站点配置
+├── docs/
+│   ├── requirements.md         # 需求规格说明书
+│   └── task1~4.md              # 分模块工作文档
+├── audit/                      # 审计报告（v1.0~v1.5）
 ├── tests/
 │   └── test_sl651.py           # 21 项自测
 └── requirements.txt            # 仅 PyYAML>=6.0
@@ -45,9 +52,8 @@ sl651-toolkit/
 - `PyYAML>=6.0`（仅多站点配置需要）
 - 模拟器 MQTT 模式需要系统安装 `mqttx` CLI：
   ```bash
-  # macOS
+  # macOS arm64
   curl -sL https://github.com/emqx/MQTTX/releases/download/v1.13.0/mqttx-cli-macos-arm64 -o /usr/local/bin/mqttx && chmod +x /usr/local/bin/mqttx
-
   # Linux x64
   curl -sL https://github.com/emqx/MQTTX/releases/download/v1.13.0/mqttx-cli-linux-x64 -o /usr/local/bin/mqttx && chmod +x /usr/local/bin/mqttx
   ```
@@ -59,7 +65,7 @@ sl651-toolkit/
 ### 1.1 CLI 使用
 
 ```bash
-# SL651 解码
+# SL651 解码（HEX/BCD 或 ASCII 编码）
 python tools/decode_cli.py sl651 --hex "7E7E2500418D233700..."
 
 # SL427 解码
@@ -109,110 +115,116 @@ from sl427 import SL427Decoder
 
 # SL651
 r = SL651Decoder().decode_hex("7E7E...")
-print(r.station_addr)
-print(r.function_name)
-print(r.tx_time_display)
+print(r.station_addr, r.function_name, r.tx_time_display)
 for e in r.elements:
     print(f"  [{e.code}] {e.name}: {e.display_value}")
 
 # SL427
 r = SL427Decoder().decode_hex("68...")
-print(r.afn_name)
-print(r.direction)
+print(r.afn_name, r.direction)
 for e in r.elements:
     print(f"  {e.name}: {e.value} {e.unit}")
 ```
 
 ---
 
-## 二、设备模拟器
+## 二、报文编码器
 
-### 2.1 CLI 使用
+### 2.1 SL651 编码
+
+| 方法 | 功能码 | 方向 | 结束符 | 说明 |
+|------|--------|------|--------|------|
+| `build_timing_frame(elements)` | 0x32 | 上行 | ETX | 定时报 |
+| `build_alarm_frame(elements)` | 0x33 | 上行 | ETX | 加报报 |
+| `build_hourly_frame(levels, inst, v)` | 0x34 | 上行 | ETX | 小时报（含 12×F5 水位） |
+| `build_link_maintain_frame()` | 0x2F | 上行 | ETX | 链路维持 |
+| `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ASCII 编码（SOH 起始） |
+| `build_query_frame(guides)` | 0x37 | 下行 | ENQ | 查询要素 |
+| `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | 参数设置 |
+| `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | 时钟校准 |
+| `build_reset_frame()` | 0x48 | 下行 | ENQ | 恢复出厂 |
+
+### 2.2 SL427 编码
+
+| 方法 | AFN | 方向 | 说明 |
+|------|-----|------|------|
+| `build_heartbeat(type)` | 0x02 | 上行 | 链路检测 |
+| `build_self_report_c0(func, data)` | 0xC0 | 上行 | 自报实时数据 |
+| `build_self_report_81(func, data)` | 0x81 | 上行 | 自报告警 |
+| `build_self_report_82(func, data)` | 0x82 | 上行 | 人工置数 |
+| `build_self_report_84(voltage)` | 0x84 | 上行 | 自报电压 |
+| `build_query_response(func, data)` | 0xB0 | 上行 | 查询响应 |
+| `build_param_set_frame(afn, func, data)` | 10~4F | 下行 | 通用参数设置 |
+| `build_set_addr(bytes)` | 0x10 | 下行 | 设置站址 |
+| `build_set_clock(dt)` | 0x11 | 下行 | 设置时钟 |
+| `build_set_work_mode(mode)` | 0x12 | 下行 | 设置工作模式 |
+| `build_set_recharge(amount)` | 0x15 | 下行 | 设置充值量 |
+| `build_set_ic_card_on()` | 0x30 | 下行 | IC卡有效 |
+| `build_set_ic_card_off()` | 0x31 | 下行 | 取消IC卡 |
+
+---
+
+## 三、设备模拟器
+
+### 3.1 CLI 使用
 
 ```bash
-# MQTT 模式（通过 mqttx CLI 发布）
+# MQTT 模式
 python tools/simulate_cli.py --type water_level --addr 1234567890 \
     --proto mqtt --broker 192.168.1.100:1883 --interval 300
 
-# TCP 模式（直接发送 SL651 原始帧）
+# TCP 模式
 python tools/simulate_cli.py --type water_level --addr 1234567890 \
     --proto sl651 --target 192.168.1.100:5001 --interval 300
 
-# 雨量站 / 墒情站
-python tools/simulate_cli.py --type rain --addr 1234567892 --proto mqtt --broker 127.0.0.1:1883
-python tools/simulate_cli.py --type soil --addr 1234567893 --proto mqtt --broker 127.0.0.1:1883
+# 启用加报
+python tools/simulate_cli.py --type rain --addr 1234567892 \
+    --proto mqtt --broker 127.0.0.1:1883 --enable-alert
 
 # 多站点 YAML
 python tools/simulate_cli.py --config examples/stations.yaml
 ```
 
-### 2.2 YAML 配置
+### 3.2 站点类型
 
-```yaml
-sender:
-  proto: mqtt
-  broker: 127.0.0.1:1883
-  topic: "sl651/{station_addr}/uplink"
+| 站点 | 模拟要素 | 要素码 | 加报触发 |
+|---|---|---|---|
+| 水位站 | 瞬时河道水位、电池电压 | `0x39`、`0x38` | 水位变化 > 阈值 |
+| 雨量站 | 日降水量、1h雨量、当前降水量、累计雨量、电压 | `0x1F`、`0x1A`、`0x20`、`0x26`、`0x38` | 降雨状态 |
+| 墒情站 | 10/20/30/40cm 含水量、电压 | `0x10`、`0x11`、`0x12`、`0x13`、`0x38` | — |
 
-stations:
-  - type: water_level
-    addr: "0000000001"
-    interval: 60
-    base_level: 5.0
-  - type: rain
-    addr: "0000000002"
-    interval: 60
+### 3.3 Web 解码界面
+
+```bash
+python web/app.py
+# 浏览器打开 http://localhost:5050
+# 粘贴 hex → 选协议 → 解析
 ```
-
-### 2.3 MQTT Topic
-
-模拟器向 `{station_addr}` 占位符替换后的 topic 发送 SL651 报文 hex 字符串。
-
-### 2.4 Python API
-
-```python
-from simulator import WaterLevelStation, MqttxSender
-from simulator.engine import SimulatorEngine
-from sl651 import SL651Encoder
-
-sender = MqttxSender(host="127.0.0.1", port=1883,
-                      topic_template="sl651/{station_addr}/uplink")
-station = WaterLevelStation("1234567890")
-engine = SimulatorEngine(sender)
-engine.add_station(station, center_addr=1, password=0,
-                   station_type=0x48, interval=300)
-engine.start()  # Ctrl+C 停止
-```
-
-### 2.5 站点类型
-
-| 站点 | 模拟要素 | 要素码 |
-|---|---|---|
-| 水位站 | 瞬时河道水位、电池电压 | `0x39`、`0x38` |
-| 雨量站 | 日降水量、1h雨量、当前降水量、累计雨量、电压 | `0x1F`、`0x1A`、`0x20`、`0x26`、`0x38` |
-| 墒情站 | 10/20/30/40cm 含水量、电压 | `0x10`、`0x11`、`0x12`、`0x13`、`0x38` |
 
 ---
 
-## 三、运行测试
+## 四、运行测试
 
 ```bash
 python tests/test_sl651.py
+
+# 21 项测试全部通过（含 23 条福建规定真实报文 CRC 验证）
 ```
 
 ---
 
-## 四、版本历史
+## 五、版本历史
 
 - **v1.2.0**：功能补全版
-  - SL651：下行帧编码（查询/设置/校时/复位）、ASCⅡ编码帧（SOH起始）
-  - SL427：编码器补全（自报告警/置数/电压/参数设置）、`build_set_clock`星期月复合字节
-  - 下行功能码改用规约定义值（0x37/0x40/0x4A/0x48 等）
-  - 模拟器加报机制、Web解码界面
-  - 福建规定 23 条真实报文作为测试用例，21 项测试
+  - SL651：下行帧编码（查询/设置/校时/复位，规约定义功能码+ENQ结束符）、ASCⅡ编码帧（SOH 起始）
+  - SL427：编码器补全（自报 5 类 + 参数设置 6 类）、`build_set_clock` 星期月复合字节
+  - 模拟器加报机制（雨量/水位触发 0x33 帧）、Web 解码界面
+  - 福建规定 23 条真实报文验证，21 项测试
+
 - **v1.1.0**：基于 njnrs 实现重构
   - 解码器：定义符动态解析、101 要素表、FF 子标识符、状态位解码
   - 新增 SL427 解码器（68H 帧 + CRC8）
   - 模拟器：拆分 sender/engine，MQTT 改用 mqttx CLI，新增 TCP 直连模式
   - CRC 修正为 CRC-16/MODBUS，负数 BCD 编码修复
-- **v1.0.0**：初始版本（GLM 生成）
+
+- **v1.0.0**：初始版本

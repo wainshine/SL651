@@ -233,14 +233,18 @@ def test_sl427_downlink() -> None:
 
 def test_sl651_downlink_frames() -> None:
     from datetime import datetime
+    from sl651.constants import ENQ
     print(">>> SL651 下行帧编码")
     encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
     decoder = SL651Decoder()
-    # 查询帧 (0x37)
+    # 查询帧 (0x37, 结束符 ENQ)
     f = encoder.build_query_frame([0x39, 0x38])
     r = decoder.decode(f)
     assert r.crc_ok and r.function_code == 0x37
     assert r.direction == 1
+    # 验证结束符为 ENQ
+    end_byte = list(f)[-3]  # CRC前1字节
+    assert end_byte == ENQ, f"查询帧结束符应为ENQ(05H)，实际 {end_byte:02X}H"
     # 设置帧 (0x40)
     f = encoder.build_set_param_frame([(0x39, 12.345, 4, 3)])
     r = decoder.decode(f)
@@ -249,6 +253,9 @@ def test_sl651_downlink_frames() -> None:
     f = encoder.build_clock_sync_frame(datetime(2025, 6, 1, 12, 0, 0))
     r = decoder.decode(f)
     assert r.crc_ok and r.function_code == 0x4A
+    # 上行帧结束符应为 ETX
+    f_up = encoder.build_timing_frame([(0x39, 12.345, 4, 3)])
+    assert list(f_up)[-3] == 0x03, f"上行帧结束符应为ETX(03H)"
     # 恢复出厂 (0x48)
     f = encoder.build_reset_frame()
     r = decoder.decode(f)

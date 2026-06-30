@@ -65,11 +65,15 @@ class SL651Encoder:
         body: bytes,
         direction: int = C.DIR_UPLINK,
         ascii_mode: bool = False,
+        end_marker: int | None = None,
     ) -> bytes:
         """构造完整 SL651 帧。
 
         ascii_mode=True 时使用 SOH(01H) 起始符（ASCⅡ编码）。
+        end_marker: 报文结束符，上行默认 ETX(03H)，下行按帧类型选 ENQ/ACK/EOT/NAK/ESC。
         """
+        if end_marker is None:
+            end_marker = C.ETX
         now = datetime.now()
         tx_time = datetime_to_bcd(now)
         serial = self._next_serial()
@@ -96,7 +100,7 @@ class SL651Encoder:
         header_body.append(serial & 0xFF)
         header_body.extend(tx_time)
         header_body.extend(body)
-        header_body.append(C.ETX)
+        header_body.append(end_marker)
 
         start_byte = C.SOH if ascii_mode else C.START_BYTE
         frame_body = bytes([start_byte, start_byte]) + bytes(header_body)
@@ -225,8 +229,9 @@ class SL651Encoder:
         return bytes(body)
 
     def build_query_frame(self, element_guides: list[int]) -> bytes:
-        """查询要素帧（下行，0x37）。"""
-        return self.build_frame(0x37, self.build_query_body(element_guides), direction=C.DIR_DOWNLINK)
+        """查询要素帧（下行，0x37，结束符 ENQ）。"""
+        return self.build_frame(0x37, self.build_query_body(element_guides),
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_set_param_body(self, params: list[tuple[int, float, int, int]]) -> bytes:
         """参数设置正文：引导符+定义符+数据值。"""
@@ -238,8 +243,9 @@ class SL651Encoder:
         return bytes(body)
 
     def build_set_param_frame(self, params: list[tuple[int, float, int, int]]) -> bytes:
-        """参数设置帧（下行，0x40 修改基本配置表）。"""
-        return self.build_frame(0x40, self.build_set_param_body(params), direction=C.DIR_DOWNLINK)
+        """参数设置帧（下行，0x40 修改基本配置表，结束符 ENQ）。"""
+        return self.build_frame(0x40, self.build_set_param_body(params),
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
         """时钟校准正文：6 字节 BCD 时间。"""
@@ -248,16 +254,18 @@ class SL651Encoder:
         return datetime_to_bcd(dt)
 
     def build_clock_sync_frame(self, dt: datetime | None = None) -> bytes:
-        """时钟校准帧 (0x4A, 下行)。"""
-        return self.build_frame(0x4A, self.build_clock_sync_body(dt), direction=C.DIR_DOWNLINK)
+        """时钟校准帧 (0x4A, 下行, 结束符 ENQ)。"""
+        return self.build_frame(0x4A, self.build_clock_sync_body(dt),
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_reset_body(self) -> bytes:
         """复位帧正文：空。"""
         return b""
 
     def build_reset_frame(self) -> bytes:
-        """恢复出厂设置帧 (0x48, 下行)。"""
-        return self.build_frame(0x48, self.build_reset_body(), direction=C.DIR_DOWNLINK)
+        """恢复出厂设置帧 (0x48, 下行, 结束符 ENQ)。"""
+        return self.build_frame(0x48, self.build_reset_body(),
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     # ------------------------------------------------------------------
     # ASCⅡ 编码
