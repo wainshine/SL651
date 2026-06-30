@@ -117,7 +117,7 @@ class SimulatorEngine:
             center_addr=center_addr,
             station_addr=station.station_addr_hex,
             password=password,
-            station_type=station.station_type,
+            station_type=station_type or station.STATION_TYPE,
         )
         runner = StationRunner(
             station, encoder, self.sender, interval, function_code,

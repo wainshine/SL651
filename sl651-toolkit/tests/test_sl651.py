@@ -335,6 +335,33 @@ def test_fujian_messages() -> None:
     print("    OK")
 
 
+def test_beijing_messages() -> None:
+    print(">>> 北京水务报文验证")
+    sample_file = PROJECT_ROOT / "examples" / "beijing_messages.txt"
+    if not sample_file.exists():
+        print("    跳过（beijing_messages.txt 不存在）")
+        return
+    from sl651 import SL651Decoder
+    decoder = SL651Decoder()
+    success, failed = 0, 0
+    for line in sample_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            r = decoder.decode_hex(line)
+            if r.crc_ok:
+                success += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+    print(f"    {success} 通过, {failed} 失败")
+    assert failed == 0
+    assert success == 25, f"应为 25 条, 实际 {success}"
+    print("    OK")
+
+
 def test_negative_bcd() -> None:
     print(">>> 负数 BCD 编解码")
     encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
@@ -355,11 +382,66 @@ def test_invalid_bcd_graceful() -> None:
     hex_msg = ("7E7E253A41BB2337ABCD32001802ABCD230601010104"
                "F1F13A41BB23374BF0F02306010100"
                "20FFFFFF2600FF99003812FF0003E2B0")
+    from sl651 import SL651Decoder
+    r = SL651Decoder().decode_hex(hex_msg)
+    # 无效 BCD 帧不崩溃，要素列表为空或含无效标记
+    assert not r.crc_ok, "畸形帧 CRC 不应通过"
+    assert isinstance(r.elements, list)
+    print(f"    CRC: {r.crc_ok}, 要素: {len(r.elements)}")
+    print("    OK")
+
+
+def test_simulator_engine_smoke() -> None:
+    print(">>> 模拟器引擎冒烟测试")
+    from simulator import WaterLevelStation, MqttxSender
+    from simulator.engine import SimulatorEngine
+    from sl651 import SL651Decoder
+    sender = MqttxSender(host="127.0.0.1", port=1883)
+    engine = SimulatorEngine(sender)
+    ws = WaterLevelStation("1234567890")
+    engine.add_station(ws)
+    # 不启动循环，仅验证 add_station 不崩溃
+    assert len(engine.runners) == 1
+    # 生成一帧
+    enc = engine.runners[0].encoder
+    frame = enc.build_timing_frame(ws.generate_elements())
+    r = SL651Decoder().decode(frame)
+    assert r.crc_ok
+    assert r.function_code == 0x32
+    print("    OK")
+
+
+def test_hourly_frame_validation() -> None:
+    """M-1: 小时报非 12 组应报错"""
+    print(">>> 小时报组数校验")
+    from sl651.encoder import EncodeError, SL651Encoder
+    enc = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0)
     try:
-        r = SL651Decoder().decode_hex(hex_msg)
-        print(f"    CRC: {r.crc_ok}, 要素: {len(r.elements)}")
-    except Exception as e:
-        print(f"    未崩溃，错误: {e}")
+        enc.build_hourly_frame([0.0] * 5, 12.0, 12.6)
+        assert False, "应抛出 EncodeError"
+    except EncodeError as e:
+        assert "12 组" in str(e)
+    # 12 组正常
+    f = enc.build_hourly_frame([0.0] * 12, 12.345, 12.6)
+    from sl651 import SL651Decoder
+    r = SL651Decoder().decode(f)
+    assert r.crc_ok
+    assert len(r.elements) == 14  # 12 F5 + 1 39 + 1 38
+    print("    OK")
+
+
+def test_recharge_le_bcd() -> None:
+    """M-2: 充值量小端 BCD"""
+    print(">>> 充值量 LE BCD")
+    from sl427 import SL427Encoder, encode_address
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    f = enc.build_set_recharge(1234)
+    # 帧: 68 L 68 C(1) A(5) AFN(1) D(4) PW(2) Tp(7) CS(1) 16
+    # D 起始 = 1+1+1+1+5+1 = 10
+    data = bytes(f)[10:14]
+    assert data == bytes([0x34, 0x12, 0x00, 0x00]), \
+        f"充值量 LE BCD 应为 34120000，实际 {data.hex().upper()}"
     print("    OK")
 
 
@@ -377,6 +459,8 @@ def main() -> int:
         test_sl427_c0_signed_value, test_sl427_invalid_l, test_sl427_downlink,
         test_sl651_downlink_frames, test_sl427_param_settings, test_sl651_ascii,
         test_fujian_messages,
+        test_simulator_engine_smoke, test_hourly_frame_validation, test_recharge_le_bcd,
+        test_beijing_messages,
         test_negative_bcd, test_invalid_bcd_graceful,
     ]
     for test in tests:

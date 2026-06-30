@@ -53,10 +53,10 @@ class SL651Encoder:
             raise EncodeError(f"station_addr 不是有效 hex: {station_addr!r}")
         self.password = password & 0xFFFF
         self.station_type = station_type & 0xFF
-        self._serial = int(datetime.now().timestamp()) % 65535  # 用时间戳保证重启后不重复
+        self._serial = int(datetime.now().timestamp()) % 65535 + 1
 
     def _next_serial(self) -> int:
-        self._serial = (self._serial + 1) % 65535
+        self._serial = (self._serial + 1) % 65535 or 1
         return self._serial
 
     def build_frame(
@@ -175,6 +175,9 @@ class SL651Encoder:
         voltage: float,
         obs_time: datetime | None = None,
     ) -> bytes:
+        """构造上行小时报正文。规约 §6.6.4.7 表36 固定 12 组 5min 水位。"""
+        if len(water_levels) != 12:
+            raise EncodeError(f"小时报要求恰好 12 组水位，当前 {len(water_levels)} 组")
         if obs_time is None:
             obs_time = datetime.now()
         ot = datetime_to_bcd(obs_time)[:5]

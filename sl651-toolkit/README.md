@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.0
+# SL651 水文规约工具包 v1.2.1
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -11,39 +11,46 @@
 ```
 sl651-toolkit/
 ├── sl651/                      # SL651 协议核心
+│   ├── README.md
 │   ├── bcd.py                  # BCD 编解码
 │   ├── crc.py                  # CRC-16/MODBUS + CRC8
-│   ├── constants.py            # 101 要素表、FF 子标识符、ASCII 标识符表、帧结构常量
+│   ├── constants.py            # 101 要素表、FF/ASCII 子标识符、帧结构常量
 │   ├── decoder.py              # 解码器（HEX/BCD + ASCII，定义符动态解析）
-│   └── encoder.py              # 编码器（上行 6 类 + 下行 4 类 + ASCII 编码）
+│   └── encoder.py              # 编码器（上行 5 类 + 下行 4 类 + ASCII）
 ├── sl427/                      # SL427 协议核心
-│   ├── constants.py            # 控制功能码(16 种)、AFN 表(32 个)、告警/终端状态
-│   ├── decoder.py              # 68H 帧解析器（含 AUX 分离）
-│   └── encoder.py              # 68H 帧编码器（自报 5 类 + 参数设置 6 类 + 通用模板）
+│   ├── README.md
+│   ├── constants.py            # 控制功能码(16)、AFN(32)、告警/终端状态
+│   ├── decoder.py              # 68H 帧解析器（AUX 分离）
+│   └── encoder.py              # 68H 帧编码器（自报 5 类 + 参数 6 类）
 ├── simulator/                  # 设备模拟器
+│   ├── README.md
 │   ├── base_station.py         # 站点基类
 │   ├── generators.py           # 水位/雨量/墒情数据生成器
-│   ├── water_level_station.py  # 水位站（N(7,3)精度）
-│   ├── rain_station.py         # 雨量站（含加报触发）
+│   ├── water_level_station.py  # 水位站 N(7,3)
+│   ├── rain_station.py         # 雨量站（含加报）
 │   ├── soil_station.py         # 墒情站
 │   ├── sender.py               # MqttxSender + TcpSender（重连）
 │   └── engine.py               # 定时循环引擎（含加报机制）
-├── tools/
-│   ├── decode_cli.py           # 解码 CLI（sl651 / sl427 双协议，text/json 输出）
-│   └── simulate_cli.py         # 模拟器 CLI（mqtt/tcp 双通道，YAML 多站点）
-├── web/
-│   └── app.py                  # Flask Web 解码界面（单文件部署）
-├── examples/
-│   ├── sample_messages.txt     # 基础示例报文
-│   ├── fujian_messages.txt     # 福建规定 23 条真实报文
-│   └── stations.yaml           # 多站点配置
-├── docs/
-│   ├── requirements.md         # 需求规格说明书
-│   └── task1~4.md              # 分模块工作文档
-├── audit/                      # 审计报告（v1.0~v1.5）
+├── tools/                      # CLI 工具
+│   ├── README.md
+│   ├── decode_cli.py           # 解码 CLI（sl651/sl427/text/json）
+│   └── simulate_cli.py         # 模拟器 CLI（mqtt/tcp/YAML）
+├── web/                        # Web 界面
+│   ├── README.md
+│   └── app.py                  # Flask 单文件解码界面
+├── examples/                   # 示例报文与配置
+│   ├── sample_messages.txt     # 基础示例
+│   ├── fujian_messages.txt     # 福建规定 23 条
+│   ├── beijing_messages.txt    # 北京水务平台 25 条
+│   ├── stations.yaml           # 多站点配置
+│   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   └── test_sl651.py           # 21 项自测
-└── requirements.txt            # 仅 PyYAML>=6.0
+│   └── test_sl651.py           # 24 项自测
+├── docs/
+│   └── requirements.md         # 需求规格说明书
+├── audit/                      # 审计报告 v1.1~v1.8
+├── requirements.txt            # PyYAML>=6.0 + flask
+└── README.md
 ```
 
 ## 环境要求
@@ -66,7 +73,7 @@ sl651-toolkit/
 
 ```bash
 # SL651 解码（HEX/BCD 或 ASCII 编码）
-python tools/decode_cli.py sl651 --hex "7E7E2500418D233700..."
+python tools/decode_cli.py sl651 --hex "7E7E25XXXXXXXXXX00..."
 
 # SL427 解码
 python tools/decode_cli.py sl427 --hex "681568..."
@@ -82,11 +89,10 @@ python tools/decode_cli.py sl651 --hex "..." -o json
 
 ```
 ========================================================================
-原始报文: 7E7E2500418D23370000320030020C06230601010314F1F100418D23374BF0F0...
+原始报文: 7E7E25XXXXXXXXXX0000320030020C06230601010314F1F1XXXXXXXXXX4BF0F0...
 ------------------------------------------------------------------------
-中心站地址    : 25
-遥测站地址    : 00418D2337
-密码          : 0000
+中心站地址    : 25**
+遥测站地址    : 1234******
 功能码        : 0x32 (定时报)
 方向          : 上行（遥测站→中心站）
 正文长度      : 48 字节
@@ -208,12 +214,17 @@ python web/app.py
 ```bash
 python tests/test_sl651.py
 
-# 21 项测试全部通过（含 23 条福建规定真实报文 CRC 验证）
+# 24 项测试全部通过（含 23 条福建 + 25 条北京真实报文 CRC 验证）
 ```
 
 ---
 
 ## 五、版本历史
+
+- **v1.2.1**：北京水务报文验证
+  - 北京水务平台 25 条真实报文（8 测站/3 类报文）全部 CRC 通过
+  - 新增 7 个北京水务 FF 子标识符（GPRS信号/机箱温度/地温/垂线流速）
+  - 24 项测试覆盖
 
 - **v1.2.0**：功能补全版
   - SL651：下行帧编码（查询/设置/校时/复位，规约定义功能码+ENQ结束符）、ASCⅡ编码帧（SOH 起始）

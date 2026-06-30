@@ -1,6 +1,6 @@
 # SL651-Toolkit 需求规格说明书
 
-> 版本：v1.2.0  
+> 版本：v1.2.1  
 > 最后更新：2026-06-30  
 > 本文件为项目需求基线，后续开发、测试、审计均以此为出发点。
 
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 21 项）
+├── tests/          测试脚本（test_sl651.py, 20 项）
 ├── examples/       示例报文（含福建规定 23 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -306,7 +306,7 @@ python web/app.py
 | `test_sl427_param_settings` | SL427 | 设置地址/时钟/充值/IC卡 往返 |
 | `test_fujian_messages` | SL651 | **23 条福建规定真实报文 CRC 验证** |
 
-**总计: 21 项**，全部通过。
+**总计: 20 项**，全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 

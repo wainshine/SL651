@@ -62,7 +62,7 @@ from sl651 import SL651Encoder
 
 enc = SL651Encoder(
     center_addr=0x01,
-    station_addr="00418D2337",
+    station_addr="1234567890",
     password=0,
     station_type=0x48,       # 河道站
 )
@@ -111,13 +111,13 @@ from sl651 import SL651Decoder, SL651Encoder
 from datetime import datetime
 
 # === 解码 ===
-r = SL651Decoder().decode_hex("7E7E2500418D23370000320030020C06230601010314...")
+r = SL651Decoder().decode_hex("7E7E01001234567890......")
 print(r.station_addr, r.function_name)
 for e in r.elements:
     print(f"  [{e.code}] {e.name}: {e.display_value}")
 
 # === 编码 ===
-enc = SL651Encoder(0x01, "00418D2337", 0, 0x48)
+enc = SL651Encoder(0x01, "1234567890", 0, 0x48)
 f = enc.build_timing_frame([(0x39, 12.345, 4, 3)], obs_time=datetime.now())
 print(f.hex().upper())
 ```

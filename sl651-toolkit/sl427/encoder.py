@@ -61,10 +61,6 @@ def encode_tp(dt: datetime | None = None, delay: int = 0) -> bytes:
     ])
 
 
-def _encode_bcd_le(value: int, byte_len: int) -> bytes:
-    """整数 -> BCD 小端编码。"""
-    return bytes(reversed(int_to_bcd_bytes(value, byte_len)))
-
 
 class SL427Encoder:
     """SL427 报文编码器。"""
@@ -234,13 +230,13 @@ class SL427Encoder:
         return self.build_param_set_frame(0x11, 0x00, data, pw)
 
     def build_set_work_mode(self, mode: int, pw: int = 0) -> bytes:
-        """设置工作模式 (AFN=12H)。mode: 0=自报, 1=查询/应答, 2=兼容, 3=调试。"""
+        """设置工作模式 (AFN=12H)。mode: 0=兼容, 1=自报, 2=查询/应答, 3=调试（规约 §7.2.4）。"""
         return self.build_param_set_frame(0x12, 0x00, bytes([mode & 0xFF]), pw)
 
     def build_set_recharge(self, amount: float, pw: int = 0) -> bytes:
-        """设置充值量 (AFN=15H)。amount 单位 m³（存储为 4B BCD, 3位小数）。"""
-        v = int(round(amount * 1000))
-        data = int_to_bcd_bytes(v, 4)
+        """设置充值量 (AFN=15H)。amount 单位 m³（4B BCD 小端，规约 §7.2.5 表13）。"""
+        v = int(round(amount))
+        data = bytes(reversed(int_to_bcd_bytes(v, 4)))
         return self.build_param_set_frame(0x15, 0x00, data, pw)
 
     def build_set_ic_card_on(self, pw: int = 0) -> bytes:

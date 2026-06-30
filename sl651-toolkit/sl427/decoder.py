@@ -208,7 +208,7 @@ def _format_addr(addr: bytes) -> str:
     if addr[0] == 0x00:
         hex_code = ""
         for b in addr[1:]:
-            hex_code += f"{b:X}"  # nibble-packed HEX
+            hex_code += f"{b:02X}"  # nibble-packed HEX, zero-pad per byte
         return f"方式2 站点编码: {hex_code}"
     admin = bcd_bytes_to_int(bytes(addr[:3]))
     stn_id = int.from_bytes(bytes(addr[3:5]), "little")  # A2=2B BIN little-endian
@@ -295,8 +295,6 @@ class SL427Decoder:
         elements, special_info = self._parse_data_field(
             afn, ctrl, data_field
         )
-
-        is_downlink = not ctrl["dir"]
 
         byte_map = _build_byte_map(bytes_list)
 

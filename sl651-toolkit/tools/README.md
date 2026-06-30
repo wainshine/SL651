@@ -33,7 +33,7 @@ python tools/decode_cli.py {sl651|sl427} [--hex HEX] [--file FILE] [--output {te
 
 ```bash
 # SL651 解码（HEX/BCD 或 ASCII）
-python tools/decode_cli.py sl651 --hex "7E7E2500418D233700..."
+python tools/decode_cli.py sl651 --hex "7E7E25XXXXXXXXXX00..."
 
 # SL427 解码
 python tools/decode_cli.py sl427 --hex "681568B4..."
@@ -47,7 +47,7 @@ python tools/decode_cli.py sl651 --hex "7E7E..." -o json
 
 ### 输出字段
 
-**SL651 text**：中心站地址、遥测站地址、密码、功能码、方向、正文长度、流水号、发报时间、测站类别、观测时间、编码方式、CRC 校验、要素列表
+**SL651 text**：中心站地址、遥测站地址、功能码、方向、正文长度、流水号、发报时间、测站类别、观测时间、编码方式、CRC 校验、要素列表
 
 **SL427 text**：方向、控制功能码、地址、AFN、用户数据长度、CRC8 校验、要素列表
 
