@@ -17,6 +17,10 @@ class RainStation(BaseStation):
         self.rain_gen = RainGenerator()
         self.voltage_gen = VoltageGenerator()
 
+    @property
+    def is_raining(self) -> bool:
+        return self.rain_gen.raining
+
     def generate_elements(self) -> list[tuple[int, float, int, int]]:
         daily, hourly, intensity = self.rain_gen.next(self.tick)
         return [

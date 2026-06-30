@@ -16,6 +16,17 @@ class WaterLevelStation(BaseStation):
         super().__init__(station_addr)
         self.water_gen = WaterLevelGenerator(base_level=base_level)
         self.voltage_gen = VoltageGenerator()
+        self._last_report_level = None
+
+    def check_alert_trigger(self, threshold: float = 0.05) -> bool:
+        current = self.water_gen.current
+        if self._last_report_level is None:
+            self._last_report_level = current
+            return False
+        if abs(current - self._last_report_level) >= threshold:
+            self._last_report_level = current
+            return True
+        return False
 
     def generate_elements(self) -> list[tuple[int, float, int, int]]:
         return [

@@ -87,6 +87,10 @@ def main() -> int:
                         help="水位基准值 (默认 5.0)")
     parser.add_argument("--function-code", type=lambda x: int(x, 16), default=0x32,
                         help="功能码 hex (默认 32=定时报)")
+    parser.add_argument("--enable-alert", action="store_true", default=False,
+                        help="启用加报（雨量站下雨时/水位站越限时发送0x33帧）")
+    parser.add_argument("--alert-threshold", type=float, default=0.05,
+                        help="水位站加报阈值，米 (默认 0.05)")
     parser.add_argument("--config", help="YAML 多站点配置文件")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细日志")
 
@@ -130,6 +134,8 @@ def main() -> int:
             station_type=station_type,
             interval=args.interval,
             function_code=args.function_code,
+            enable_alert=args.enable_alert,
+            alert_threshold=args.alert_threshold,
         )
         engine.start()
     except SendError as e:
@@ -180,6 +186,8 @@ def _load_config(config_path: str) -> int:
             station_type=station_type,
             interval=sc.get("interval", 300),
             function_code=sc.get("function_code", 0x32),
+            enable_alert=sc.get("enable_alert", False),
+            alert_threshold=sc.get("alert_threshold", 0.05),
         )
 
     engine.start()

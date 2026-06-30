@@ -140,3 +140,107 @@ class SL427Encoder:
         """查询响应帧 (AFN=B0H, 无AUX)。"""
         ctrl = C.make_ctrl(dir_=1, func_code=func_code)
         return self.build_frame(0xB0, ctrl, data)
+
+    def build_self_report_81(
+        self,
+        func_code: int,
+        data: bytes,
+        tp: datetime | None = None,
+        alarm: int = 0,
+        state: int = 0,
+    ) -> bytes:
+        """自报告警数据帧 (AFN=81H, AUX=仅Tp)。
+
+        data + alarm(2B BIN) + state(2B BIN) + Tp(7B)
+        """
+        payload = bytearray(data)
+        payload.extend(alarm.to_bytes(2, "little"))
+        payload.extend(state.to_bytes(2, "little"))
+        tp_bytes = encode_tp(tp, delay=0)
+        ctrl = C.make_ctrl(dir_=1, func_code=func_code)
+        return self.build_frame(0x81, ctrl, bytes(payload), tp=tp_bytes)
+
+    def build_self_report_82(
+        self,
+        func_code: int,
+        data: bytes,
+        tp: datetime | None = None,
+        alarm: int = 0,
+        state: int = 0,
+    ) -> bytes:
+        """人工置数帧 (AFN=82H, AUX=仅Tp)。
+
+        data + alarm(2B BIN) + state(2B BIN) + Tp(7B)
+        """
+        payload = bytearray(data)
+        payload.extend(alarm.to_bytes(2, "little"))
+        payload.extend(state.to_bytes(2, "little"))
+        tp_bytes = encode_tp(tp, delay=0)
+        ctrl = C.make_ctrl(dir_=1, func_code=func_code)
+        return self.build_frame(0x82, ctrl, bytes(payload), tp=tp_bytes)
+
+    def build_self_report_84(
+        self,
+        voltage: float,
+        tp: datetime | None = None,
+    ) -> bytes:
+        """自报电压帧 (AFN=84H, AUX=仅Tp)。
+
+        数据域: 电压(2B BCD LE) + alarm(2B) + state(2B) + Tp(7B)
+        """
+        v = int(round(voltage * 100))
+        v_data = bytes(reversed(int_to_bcd_bytes(v, 2)))
+        payload = bytearray(v_data)
+        payload.extend((0).to_bytes(2, "little"))
+        payload.extend((0).to_bytes(2, "little"))
+        tp_bytes = encode_tp(tp, delay=0)
+        ctrl = C.make_ctrl(dir_=1, func_code=0x0D)
+        return self.build_frame(0x84, ctrl, bytes(payload), tp=tp_bytes)
+
+    def build_param_set_frame(
+        self,
+        afn: int,
+        func_code: int,
+        data: bytes,
+        pw: int = 0,
+        tp: datetime | None = None,
+    ) -> bytes:
+        """通用参数设置帧 (AFN=10H~4FH, AUX=PW+Tp, 下行)。"""
+        ctrl = C.make_ctrl(dir_=0, func_code=func_code)
+        pw_bytes = pw.to_bytes(2, "little")
+        return self.build_frame(afn, ctrl, data, tp=encode_tp(tp), pw=pw_bytes)
+
+    # ------------------------------------------------------------------
+    # 参数设置便捷方法 (AFN=10H~34H)
+    # ------------------------------------------------------------------
+
+    def build_set_addr(self, new_addr_bytes: bytes, pw: int = 0) -> bytes:
+        """设置地址 (AFN=10H)。"""
+        return self.build_param_set_frame(0x10, 0x00, new_addr_bytes, pw)
+
+    def build_set_clock(self, dt: datetime | None = None, pw: int = 0) -> bytes:
+        """设置时钟 (AFN=11H)。6B BCD: 秒分时日月年星期。"""
+        if dt is None:
+            dt = datetime.now()
+        data = bytes([_bcd_byte(dt.second), _bcd_byte(dt.minute),
+                       _bcd_byte(dt.hour), _bcd_byte(dt.day),
+                       _bcd_byte(dt.month), _bcd_byte(dt.year - 2000)])
+        return self.build_param_set_frame(0x11, 0x00, data, pw)
+
+    def build_set_work_mode(self, mode: int, pw: int = 0) -> bytes:
+        """设置工作模式 (AFN=12H)。mode: 0=自报, 1=查询/应答, 2=兼容, 3=调试。"""
+        return self.build_param_set_frame(0x12, 0x00, bytes([mode & 0xFF]), pw)
+
+    def build_set_recharge(self, amount: float, pw: int = 0) -> bytes:
+        """设置充值量 (AFN=15H)。amount 单位 m³（存储为 4B BCD, 3位小数）。"""
+        v = int(round(amount * 1000))
+        data = int_to_bcd_bytes(v, 4)
+        return self.build_param_set_frame(0x15, 0x00, data, pw)
+
+    def build_set_ic_card_on(self, pw: int = 0) -> bytes:
+        """IC卡功能有效 (AFN=30H)。"""
+        return self.build_param_set_frame(0x30, 0x00, b"", pw)
+
+    def build_set_ic_card_off(self, pw: int = 0) -> bytes:
+        """取消IC卡功能 (AFN=31H)。"""
+        return self.build_param_set_frame(0x31, 0x00, b"", pw)

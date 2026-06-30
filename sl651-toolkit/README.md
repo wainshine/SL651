@@ -18,7 +18,8 @@ sl651-toolkit/
 │   └── encoder.py              # 编码器
 ├── sl427/                     # SL427 协议核心
 │   ├── constants.py            # 控制功能码、AFN 表、告警位
-│   └── decoder.py              # 68H 帧解析器
+│   ├── decoder.py              # 68H 帧解析器
+│   └── encoder.py              # 68H 帧编码器
 ├── simulator/                  # 设备模拟器
 │   ├── base_station.py         # 站点基类
 │   ├── generators.py           # 水位/雨量/墒情数据生成器
@@ -33,7 +34,7 @@ sl651-toolkit/
 ├── examples/
 │   ├── stations.yaml           # 多站点配置
 ├── tests/
-│   └── test_sl651.py           # 10 项自测
+│   └── test_sl651.py           # 11 项自测
 └── requirements.txt            # 仅 PyYAML>=6.0
 ```
 

@@ -25,12 +25,16 @@ class StationRunner:
         sender: Sender,
         interval: float = 300.0,
         function_code: int = 0x32,
+        enable_alert: bool = False,
+        alert_threshold: float = 0.05,
     ):
         self.station = station
         self.encoder = encoder
         self.sender = sender
         self.interval = interval
         self.function_code = function_code
+        self.enable_alert = enable_alert
+        self.alert_threshold = alert_threshold
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -47,8 +51,9 @@ class StationRunner:
         self._stop.set()
 
     def _run(self) -> None:
-        logger.info("[%s] %s 启动, 间隔 %ds",
-                     self.station.station_addr, self.station.name, self.interval)
+        logger.info("[%s] %s 启动, 间隔 %ds, 加报=%s",
+                     self.station.station_addr, self.station.name, self.interval,
+                     "开启" if self.enable_alert else "关闭")
         while not self._stop.is_set():
             try:
                 now = datetime.now()
@@ -59,10 +64,31 @@ class StationRunner:
                 hex_msg = frame.hex().upper()
                 ok = self.sender.send(hex_msg, self.station.station_addr)
                 if ok:
-                    logger.info("[%s] 已发送 %s (%dB)",
+                    logger.info("[%s] 已发送 %s 功能码=0x%02X (%dB)",
                                  self.station.station_addr,
                                  now.strftime("%H:%M:%S"),
+                                 self.function_code,
                                  len(frame))
+
+                if self.enable_alert:
+                    triggered = False
+                    if hasattr(self.station, 'is_raining') and self.station.is_raining:
+                        triggered = True
+                    if hasattr(self.station, 'check_alert_trigger'):
+                        triggered = self.station.check_alert_trigger(self.alert_threshold)
+
+                    if triggered:
+                        alert_frame = self.encoder.build_timing_frame(
+                            elements, obs_time=now, function_code=0x33,
+                        )
+                        alert_hex = alert_frame.hex().upper()
+                        ok_alert = self.sender.send(alert_hex, self.station.station_addr)
+                        if ok_alert:
+                            logger.info("[%s] 已发送加报 %s 功能码=0x33 (%dB)",
+                                         self.station.station_addr,
+                                         now.strftime("%H:%M:%S"),
+                                         len(alert_frame))
+
                 self.station.advance(int(self.interval / 60) or 1)
             except Exception:
                 logger.exception("[%s] 上报异常", self.station.station_addr)
@@ -84,6 +110,8 @@ class SimulatorEngine:
         station_type: int = 0x48,
         interval: float = 300.0,
         function_code: int = 0x32,
+        enable_alert: bool = False,
+        alert_threshold: float = 0.05,
     ) -> None:
         encoder = SL651Encoder(
             center_addr=center_addr,
@@ -91,7 +119,10 @@ class SimulatorEngine:
             password=password,
             station_type=station.station_type,
         )
-        runner = StationRunner(station, encoder, self.sender, interval, function_code)
+        runner = StationRunner(
+            station, encoder, self.sender, interval, function_code,
+            enable_alert=enable_alert, alert_threshold=alert_threshold,
+        )
         self.runners.append(runner)
         logger.info("已添加 %s 站点 %s", station.name, station.station_addr)
 

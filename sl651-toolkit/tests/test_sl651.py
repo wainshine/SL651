@@ -102,7 +102,7 @@ def test_crc8() -> None:
     print("    OK")
 
 
-def test_sl427() -> None:
+def test_sl427_decode() -> None:
     from sl427 import SL427Decoder
     print(">>> SL427 解码")
     msg = "681568B40102030405C05545040020700030151412052600AD16"
@@ -113,7 +113,7 @@ def test_sl427() -> None:
     print("    OK")
 
 
-def test_sl427_encoder() -> None:
+def test_sl427_encoder_roundtrip() -> None:
     from sl427 import SL427Encoder, SL427Decoder, make_ctrl, encode_address, encode_tp
     from datetime import datetime
     from sl651.bcd import int_to_bcd_bytes
@@ -124,12 +124,179 @@ def test_sl427_encoder() -> None:
     f = enc.build_heartbeat()
     r = SL427Decoder().decode(f)
     assert r.crc_ok and r.afn == 0x02
-    # C0 self-report
+    # C0 self-report with water level
     wl_data = bytes(reversed(int_to_bcd_bytes(37865, 4)))
     f2 = enc.build_self_report_c0(func_code=0x02, data=wl_data,
                                    tp=datetime(2026, 5, 12, 14, 15, 30))
     r2 = SL427Decoder().decode(f2)
     assert r2.crc_ok and r2.afn == 0xC0
+    print("    OK")
+
+
+def test_sl427_address_encoding() -> None:
+    from sl427 import encode_address
+    print(">>> SL427 地址编码")
+    # 方式1: admin=110108, stn=1284
+    a1 = encode_address(method=1, admin_code=110108, stn_id=1284)
+    assert a1[:3] == bytes([0x11, 0x01, 0x08])  # BCD
+    assert int.from_bytes(a1[3:5], "little") == 1284  # BIN little-endian
+    # 方式2: hex_code="1234567890ABCDEF" → error (>8)
+    try:
+        encode_address(method=2, hex_code="1234567890ABCDEF")
+        assert False, "should raise"
+    except Exception:
+        pass
+    # 方式2: 8位HEX
+    a2 = encode_address(method=2, hex_code="12345678")
+    assert a2[0] == 0x00
+    assert a2[1:].hex().upper() == "12345678"
+    print("    OK")
+
+
+def test_sl427_tp_encoding() -> None:
+    from sl427 import encode_tp
+    from datetime import datetime
+    print(">>> SL427 Tp 时间编码")
+    tp = encode_tp(datetime(2026, 5, 12, 14, 15, 30), delay=5)
+    assert len(tp) == 7
+    from sl651.bcd import bcd_to_int
+    assert bcd_to_int(tp[0]) == 30    # 秒
+    assert bcd_to_int(tp[1]) == 15    # 分
+    assert bcd_to_int(tp[2]) == 14    # 时
+    assert bcd_to_int(tp[3]) == 12    # 日
+    assert bcd_to_int(tp[4]) == 5     # 月
+    assert bcd_to_int(tp[5]) == 26    # 年 (2026-2000)
+    assert tp[6] == 5                 # 延时 5min
+    print("    OK")
+
+
+def test_sl427_c0_signed_value() -> None:
+    from sl427 import SL427Encoder, SL427Decoder, encode_address
+    from sl651.bcd import int_to_bcd_bytes
+    from datetime import datetime
+    print(">>> SL427 有符号水位往返")
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    # 水位 -0.345 → BCD 345, 4 bytes, signed=True, LE
+    # Signed BCD: last byte high nibble = 0xF for negative
+    # 345 in BCD: 00 00 03 45, signed negative: 00 00 03 45 → 4bytes, last byte 0x45 → strip hi nibble → 0x05, then negate
+    # Actually for SL427 signed BCD LE: data bytes in LE order, last byte's high nibble indicates sign
+    # value=345 → BCD LE = 45 03 00 00. For negative: 45→0xF5 (set high nibble F)
+    raw = bytes([0x45, 0x03, 0x00, 0xF0])  # -345, 4B signed LE
+    f = enc.build_self_report_c0(func_code=0x02, data=raw, tp=datetime(2026, 6, 1, 12, 0))
+    r = SL427Decoder().decode(f)
+    assert r.crc_ok
+    # Find water level element
+    wl = [e for e in r.elements if e.name == "水位"]
+    assert len(wl) > 0
+    print("    OK")
+
+
+def test_sl427_invalid_l() -> None:
+    from sl427 import SL427Decoder, SL427Encoder, encode_address
+    from sl427.decoder import DecodeError
+    print(">>> SL427 畸形 L 检测")
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    f = enc.build_heartbeat()
+    # Corrupt L byte
+    corrupted = bytearray(f)
+    corrupted[1] = 0x99
+    try:
+        SL427Decoder().decode(bytes(corrupted))
+        assert False, "should raise"
+    except DecodeError as e:
+        assert "不匹配" in str(e)
+    print("    OK")
+
+
+def test_sl427_downlink() -> None:
+    from sl427 import SL427Encoder, SL427Decoder, make_ctrl, encode_address
+    print(">>> SL427 下行帧解码")
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    # Downlink: DIR=0, func_code=0x00 (确认), AFN=0x02 (链路检测)
+    ctrl = make_ctrl(dir_=0, func_code=0x00)
+    f = enc.build_frame(afn=0x02, ctrl_word=ctrl, data=b"\xF2")
+    r = SL427Decoder().decode(f)
+    assert r.crc_ok
+    assert "下行" in r.direction
+    assert len(r.elements) >= 1
+    # Downlink query (B0)
+    ctrl2 = make_ctrl(dir_=0, func_code=0x01)  # 查询雨量
+    f2 = enc.build_frame(afn=0xB0, ctrl_word=ctrl2)
+    r2 = SL427Decoder().decode(f2)
+    assert r2.crc_ok
+    assert "下行" in r2.direction
+    print("    OK")
+
+
+def test_sl651_downlink_frames() -> None:
+    from datetime import datetime
+    print(">>> SL651 下行帧编码")
+    encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
+    decoder = SL651Decoder()
+    # 查询帧
+    f = encoder.build_query_frame([0x39, 0x38])
+    r = decoder.decode(f)
+    assert r.crc_ok and r.function_code == 0x09
+    assert r.direction == 1
+    # 设置帧
+    f = encoder.build_set_param_frame([(0x39, 12.345, 4, 3)])
+    r = decoder.decode(f)
+    assert r.crc_ok and r.function_code == 0x08
+    # 校时帧
+    f = encoder.build_clock_sync_frame(datetime(2025, 6, 1, 12, 0, 0))
+    r = decoder.decode(f)
+    assert r.crc_ok and r.function_code == 0x0C
+    # 复位帧
+    f = encoder.build_reset_frame()
+    r = decoder.decode(f)
+    assert r.crc_ok and r.function_code == 0x0D
+    print("    OK")
+
+
+def test_sl427_param_settings() -> None:
+    from sl427 import SL427Encoder, SL427Decoder, encode_address
+    from datetime import datetime
+    print(">>> SL427 参数设置")
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    decoder = SL427Decoder()
+    # 设置地址
+    f = enc.build_set_addr(bytes([0x11, 0x01, 0x08, 0x10, 0x20]))
+    r = decoder.decode(f)
+    assert r.crc_ok and r.afn == 0x10
+    # 设置时钟
+    f = enc.build_set_clock(datetime(2025, 6, 1, 12, 0, 0))
+    r = decoder.decode(f)
+    assert r.crc_ok and r.afn == 0x11
+    # 设置充值量
+    f = enc.build_set_recharge(1234.567)
+    r = decoder.decode(f)
+    assert r.crc_ok and r.afn == 0x15
+    # IC 卡
+    f = enc.build_set_ic_card_on()
+    r = decoder.decode(f)
+    assert r.crc_ok and r.afn == 0x30
+    print("    OK")
+
+
+def test_sl651_ascii() -> None:
+    from datetime import datetime
+    print(">>> SL651 ASCII 编解码")
+    encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
+    decoder = SL651Decoder()
+    f = encoder.build_ascii_frame(
+        [("Z", "12.345"), ("Q", "5.678"), ("VT", "12.6")],
+        obs_time=datetime(2025, 6, 1, 12, 0),
+    )
+    r = decoder.decode(f)
+    assert r.crc_ok
+    assert r.encoding == "ASCII"
+    codes = {e.code: e.value for e in r.elements}
+    assert codes.get("Z") == 12.345
+    assert codes.get("VT") == 12.6
     print("    OK")
 
 
@@ -170,7 +337,11 @@ def main() -> int:
         test_bcd, test_crc, test_def_byte,
         test_decode_njnrs, test_decode_watertester,
         test_encode_decode_roundtrip,
-        test_crc8, test_sl427, test_sl427_encoder, test_negative_bcd, test_invalid_bcd_graceful,
+        test_crc8, test_sl427_decode, test_sl427_encoder_roundtrip,
+        test_sl427_address_encoding, test_sl427_tp_encoding,
+        test_sl427_c0_signed_value, test_sl427_invalid_l, test_sl427_downlink,
+        test_sl651_downlink_frames, test_sl427_param_settings, test_sl651_ascii,
+        test_negative_bcd, test_invalid_bcd_graceful,
     ]
     for test in tests:
         try:

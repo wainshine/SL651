@@ -64,8 +64,12 @@ class SL651Encoder:
         function_code: int,
         body: bytes,
         direction: int = C.DIR_UPLINK,
+        ascii_mode: bool = False,
     ) -> bytes:
-        """构造完整 SL651 帧。"""
+        """构造完整 SL651 帧。
+
+        ascii_mode=True 时使用 SOH(01H) 起始符（ASCⅡ编码）。
+        """
         now = datetime.now()
         tx_time = datetime_to_bcd(now)
         serial = self._next_serial()
@@ -94,12 +98,13 @@ class SL651Encoder:
         header_body.extend(body)
         header_body.append(C.ETX)
 
-        frame_body = bytes([C.START_BYTE, C.START_BYTE]) + bytes(header_body)
+        start_byte = C.SOH if ascii_mode else C.START_BYTE
+        frame_body = bytes([start_byte, start_byte]) + bytes(header_body)
         crc = crc16(frame_body)
         header_body.append((crc >> 8) & 0xFF)
         header_body.append(crc & 0xFF)
 
-        return bytes([C.START_BYTE, C.START_BYTE]) + bytes(header_body)
+        return bytes([start_byte, start_byte]) + bytes(header_body)
 
     def build_timing_body(
         self,
@@ -138,3 +143,158 @@ class SL651Encoder:
     ) -> bytes:
         body = self.build_timing_body(elements, obs_time)
         return self.build_frame(function_code, body)
+
+    def build_link_maintain_body(self) -> bytes:
+        return b""
+
+    def build_link_maintain_frame(self) -> bytes:
+        return self.build_frame(0x2F, self.build_link_maintain_body())
+
+    def build_alarm_body(
+        self,
+        elements: list[tuple[int, float, int, int]],
+        obs_time: datetime | None = None,
+    ) -> bytes:
+        return self.build_timing_body(elements, obs_time)
+
+    def build_alarm_frame(
+        self,
+        elements: list[tuple[int, float, int, int]],
+        obs_time: datetime | None = None,
+    ) -> bytes:
+        return self.build_frame(0x33, self.build_alarm_body(elements, obs_time))
+
+    def build_hourly_body(
+        self,
+        water_levels: list[float | None],
+        inst_level: float,
+        voltage: float,
+        obs_time: datetime | None = None,
+    ) -> bytes:
+        if obs_time is None:
+            obs_time = datetime.now()
+        ot = datetime_to_bcd(obs_time)[:5]
+
+        body = bytearray()
+        body.append(0xF1)
+        body.append(0xF1)
+        body.extend(self.station_addr_bytes)
+        body.append(self.station_type)
+        body.append(0xF0)
+        body.append(0xF0)
+        body.extend(ot)
+
+        body.append(0xF5)
+        body.append(_make_def_byte(24, 2))
+        for wl in water_levels:
+            if wl is None:
+                body.extend(b'\xFF\xFF')
+            else:
+                val = int(round(wl * 100))
+                body.extend(val.to_bytes(2, 'big'))
+
+        body.append(0x39)
+        body.append(_make_def_byte(4, 3))
+        body.extend(_encode_bcd(inst_level, 4, 3))
+
+        body.append(0x38)
+        body.append(_make_def_byte(2, 2))
+        body.extend(_encode_bcd(voltage, 2, 2))
+
+        return bytes(body)
+
+    def build_hourly_frame(
+        self,
+        water_levels: list[float | None],
+        inst_level: float,
+        voltage: float,
+        obs_time: datetime | None = None,
+    ) -> bytes:
+        return self.build_frame(0x34, self.build_hourly_body(water_levels, inst_level, voltage, obs_time))
+
+    # ------------------------------------------------------------------
+    # 下行帧（中心站 → 遥测站）
+    # ------------------------------------------------------------------
+
+    def build_query_body(self, element_guides: list[int]) -> bytes:
+        """查询帧正文：列出要查询的要素引导符+定义符（数据域为空）。"""
+        body = bytearray()
+        for guide in element_guides:
+            body.append(guide)
+            body.append(_make_def_byte(0, 0))  # 查询时数据域长度为0
+        return bytes(body)
+
+    def build_query_frame(self, element_guides: list[int]) -> bytes:
+        """查询要素帧（下行）。"""
+        return self.build_frame(0x09, self.build_query_body(element_guides), direction=C.DIR_DOWNLINK)
+
+    def build_set_param_body(self, params: list[tuple[int, float, int, int]]) -> bytes:
+        """参数设置正文：引导符+定义符+数据值。"""
+        body = bytearray()
+        for guide, value, data_len, decimals in params:
+            body.append(guide)
+            body.append(_make_def_byte(data_len, decimals))
+            body.extend(_encode_bcd(value, data_len, decimals))
+        return bytes(body)
+
+    def build_set_param_frame(self, params: list[tuple[int, float, int, int]]) -> bytes:
+        """参数设置帧（下行）。"""
+        return self.build_frame(0x08, self.build_set_param_body(params), direction=C.DIR_DOWNLINK)
+
+    def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
+        """时钟校准正文：6 字节 BCD 时间。"""
+        if dt is None:
+            dt = datetime.now()
+        return datetime_to_bcd(dt)
+
+    def build_clock_sync_frame(self, dt: datetime | None = None) -> bytes:
+        """时钟校准帧 (0x0C, 下行)。"""
+        return self.build_frame(0x0C, self.build_clock_sync_body(dt), direction=C.DIR_DOWNLINK)
+
+    def build_reset_body(self) -> bytes:
+        """复位帧正文：空。"""
+        return b""
+
+    def build_reset_frame(self) -> bytes:
+        """复位帧 (0x0D, 下行)。"""
+        return self.build_frame(0x0D, self.build_reset_body(), direction=C.DIR_DOWNLINK)
+
+    # ------------------------------------------------------------------
+    # ASCⅡ 编码
+    # ------------------------------------------------------------------
+
+    def build_ascii_body(
+        self,
+        elements: list[tuple[str, str]],
+        obs_time: datetime | None = None,
+    ) -> bytes:
+        """构造 ASCⅡ 编码正文。
+
+        elements: [(ASCⅡ标识符, 值字符串), ...]
+        如: [("Z", "12.345"), ("Q", "5.678"), ("VT", "12.6")]
+        """
+        if obs_time is None:
+            obs_time = datetime.now()
+
+        parts = []
+        parts.append("F1F1")
+        parts.append(self.station_addr_hex)
+        parts.append(f"{self.station_type:02X}")
+        parts.append("F0F0")
+        parts.append(obs_time.strftime("%y%m%d%H%M"))
+        for code, val in elements:
+            parts.append(code)
+            parts.append(val)
+        parts.append("")  # 末尾空格（规约要求）
+
+        return " ".join(parts).encode("ascii")
+
+    def build_ascii_frame(
+        self,
+        elements: list[tuple[str, str]],
+        obs_time: datetime | None = None,
+        function_code: int = 0x32,
+    ) -> bytes:
+        """构造 ASCⅡ 编码帧（SOH 起始）。"""
+        body = self.build_ascii_body(elements, obs_time)
+        return self.build_frame(function_code, body, ascii_mode=True)

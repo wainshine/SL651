@@ -239,8 +239,8 @@ class SL651Decoder:
             raise DecodeError("报文包含非十六进制字符")
         if len(cleaned) % 2 != 0:
             raise DecodeError("报文长度不是偶数")
-        if cleaned[:4].upper() != "7E7E":
-            raise DecodeError("报文不是以 7E7E 开头")
+        if cleaned[:4].upper() not in ("7E7E", "0101"):
+            raise DecodeError("报文不是以 7E7E(HEX/BCD) 或 0101(ASCII) 开头")
         return self.decode(bytes.fromhex(cleaned))
 
     def decode(self, frame: bytes) -> DecodedMessage:
@@ -249,6 +249,7 @@ class SL651Decoder:
 
         bytes_list = list(frame)
         total = len(bytes_list)
+        is_ascii = frame[0] == C.SOH
         ident_hi = bytes_list[11]
         ident_lo = bytes_list[12]
         direction = (ident_hi >> 7) & 1
@@ -282,7 +283,7 @@ class SL651Decoder:
 
         func_name = C.FUNC_MAP.get(func, f"未知(0x{func:02X})")
         is_uniform = func == 0x31
-        encoding = "HEX" if is_uniform else "BCD"
+        encoding = "ASCII" if is_ascii else ("HEX" if is_uniform else "BCD")
         direction_label = "上行（遥测站→中心站）" if direction == 0 else "下行（中心站→遥测站）"
 
         stn_code = b""
@@ -291,8 +292,8 @@ class SL651Decoder:
         stn_type_name = ""
         obs_time_bytes = b""
 
-        if direction == 0:
-            # 上行: 表11 结构 — 偏移22/30有 F1F1/F0F0 标识
+        if direction == 0 and not is_ascii:
+            # 上行 HEX/BCD: 表11 结构 — 偏移22/30有 F1F1/F0F0 标识
             can_parse_stn = (
                 bytes_list[C.F1_OFFSET] == 0xF1 and bytes_list[C.F1_OFFSET + 1] == 0xF1 and
                 bytes_list[C.F0_OFFSET] == 0xF0 and bytes_list[C.F0_OFFSET + 1] == 0xF0
@@ -306,9 +307,12 @@ class SL651Decoder:
                                                    C.OBS_TIME_OFFSET + C.OBS_TIME_LEN])
                 data_start = C.UPLINK_DATA_OFFSET
             else:
-                # 2F 链路维持 / 35 人工置数 / 多包 SYN 等无 F1/F0 的结构
                 stn_code = bytes(station_raw)
                 data_start = C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN
+        elif is_ascii:
+            # ASCII 编码: 正文为 ASCⅡ 文本，起始于流水号+发报时间之后
+            stn_code = bytes(station_raw)
+            data_start = C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN
         else:
             stn_code = bytes(station_raw)
             obs_time_bytes = b"\x00" * C.OBS_TIME_LEN
@@ -324,7 +328,10 @@ class SL651Decoder:
         tx_display = _fmt_bcd_time_sec(tx_hex)
 
         data_bytes = bytes(bytes_list[data_start:etx_pos])
-        elements = self._parse_elements(data_bytes)
+        if is_ascii:
+            elements = self._parse_ascii_elements(data_bytes)
+        else:
+            elements = self._parse_elements(data_bytes)
 
         byte_map = _build_byte_map(bytes_list, direction, etx_pos)
         byte_table = _build_byte_table(bytes_list, direction, etx_pos)
@@ -434,6 +441,51 @@ class SL651Decoder:
                     raw=pv[1], data_type="BCD", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
                 ))
 
+        return elements
+
+    def _parse_ascii_elements(self, data: bytes) -> list[ElementValue]:
+        """解析 ASCⅡ 编码正文（空格分隔的 ASCII 标识符和值）。"""
+        if not data:
+            return []
+        elements: list[ElementValue] = []
+        ascii_text = data.decode("ascii", errors="replace").strip()
+        tokens = ascii_text.split()
+        i = 0
+        # Skip F1F1 section: F1F1 + stn_code + stn_type
+        if i < len(tokens) and tokens[i].upper() == "F1F1":
+            i += 3  # F1F1, stn_code_hex, stn_type_hex
+        # Skip F0F0 section: F0F0 + obs_time
+        if i < len(tokens) and tokens[i].upper() == "F0F0":
+            i += 2  # F0F0, obs_time_hex
+
+        while i + 1 < len(tokens):
+            code = tokens[i]
+            value_str = tokens[i + 1]
+            entry = C.SL651_ASCII_ELEMENTS.get(code.upper())
+
+            if code.upper() in ("F1F1", "F0F0"):
+                i += 1
+                continue
+            
+            desc = entry[0] if entry else f"未知({code})"
+            unit = entry[1] if entry else ""
+
+            try:
+                if "." in value_str or value_str.startswith("-"):
+                    val = float(value_str)
+                    decimals = len(value_str.split(".")[1]) if "." in value_str else 0
+                else:
+                    val = int(value_str)
+                    decimals = 0
+            except ValueError:
+                val = value_str
+                decimals = 0
+
+            elements.append(ElementValue(
+                code=code.upper(), name=desc, value=val, unit=unit,
+                raw=value_str, data_type="ASCII", decimal=decimals,
+            ))
+            i += 2
         return elements
 
     @staticmethod
