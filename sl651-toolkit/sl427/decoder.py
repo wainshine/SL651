@@ -156,7 +156,7 @@ def _parse_comprehensive(data: bytes) -> list[ElementValue]:
 
 def _parse_alarm(data: bytes) -> list[ElementValue]:
     """解析告警状态。"""
-    num = (data[0] << 8) | data[1]
+    num = data[0] | (data[1] << 8)
     items = []
     for ab in C.ALARM_BITS:
         bv = (num >> ab["bit"]) & 1
@@ -169,7 +169,7 @@ def _parse_alarm(data: bytes) -> list[ElementValue]:
 
 def _parse_terminal(data: bytes) -> list[ElementValue]:
     """解析终端状态。"""
-    num = (data[0] << 8) | data[1]
+    num = data[0] | (data[1] << 8)
     items = []
     for tb in C.TERMINAL_BITS:
         bits = tb["bit"]
@@ -379,7 +379,61 @@ class SL427Decoder:
                 unit="bytes", raw=bytes_to_hex_compact(data_field), editable=False,
             ))
 
-        elif afn_hex in ("81", "82", "84", "ff"):
+        elif afn_hex in ("81", "82"):
+            raw_len = len(data_field)
+            if raw_len >= C.TP_LEN + 4:
+                tp_bytes = data_field[-C.TP_LEN:]
+                state_bytes = data_field[-C.TP_LEN - 2:-C.TP_LEN]
+                alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
+                real_data = data_field[:-C.TP_LEN - 4]
+                if len(real_data) > 0:
+                    if func_code == 0x0E:
+                        elements.extend(_parse_comprehensive(real_data))
+                    else:
+                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                elements.extend(_parse_alarm(alarm_bytes))
+                elements.extend(_parse_terminal(state_bytes))
+                tp_str = _fmt_time_427(tp_bytes)
+                elements.append(ElementValue(
+                    name="观测时间", value=tp_str, unit="",
+                    raw=bytes_to_hex_compact(tp_bytes),
+                    is_time=True, byte_len=C.TP_LEN,
+                ))
+            else:
+                elements.extend(_parse_ctrl_func_data(func_code, data_field))
+
+        elif afn_hex == "84":
+            raw_len = len(data_field)
+            if raw_len >= C.TP_LEN + 4 and len(data_field) >= 2:
+                tp_bytes = data_field[-C.TP_LEN:]
+                state_bytes = data_field[-C.TP_LEN - 2:-C.TP_LEN]
+                alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
+                volt_bytes = data_field[:-C.TP_LEN - 4]
+                if volt_bytes:
+                    volt_val = bcd_bytes_to_int_le(volt_bytes) / 100
+                    elements.append(ElementValue(
+                        name="电压", value=f"{volt_val:.2f}", unit="V",
+                        raw=bytes_to_hex_compact(volt_bytes),
+                        byte_len=len(volt_bytes), decimal=2,
+                    ))
+                elements.extend(_parse_alarm(alarm_bytes))
+                elements.extend(_parse_terminal(state_bytes))
+                tp_str = _fmt_time_427(tp_bytes)
+                elements.append(ElementValue(
+                    name="观测时间", value=tp_str, unit="",
+                    raw=bytes_to_hex_compact(tp_bytes),
+                    is_time=True, byte_len=C.TP_LEN,
+                ))
+            else:
+                if data_field:
+                    volt_val = bcd_bytes_to_int_le(data_field) / 100
+                    elements.append(ElementValue(
+                        name="电压", value=f"{volt_val:.2f}", unit="V",
+                        raw=bytes_to_hex_compact(data_field),
+                        byte_len=len(data_field), decimal=2,
+                    ))
+
+        elif afn_hex == "ff":
             if func_code == 0x0E:
                 elements.extend(_parse_comprehensive(data_field))
             else:

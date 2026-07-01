@@ -1,7 +1,7 @@
 # SL651-Toolkit 需求规格说明书
 
-> 版本：v1.2.1  
-> 最后更新：2026-06-30  
+> 版本：v1.2.2  
+> 最后更新：2026-07-01  
 > 本文件为项目需求基线，后续开发、测试、审计均以此为出发点。
 
 ---
@@ -35,8 +35,8 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 20 项）
-├── examples/       示例报文（含福建规定 23 条真实报文）
+├── tests/          测试脚本（test_sl651.py, 24 项）
+├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
 ```
@@ -112,7 +112,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
     return (b >> 3) & 0x1F, b & 0x07
 ```
 
-**要素标识符表（规约附录C）** — 101 项已全部收录。支持 HEX/BCD 引导符表 `SL651_ELEMENTS` 和 ASCⅡ 标识符表 `SL651_ASCII_ELEMENTS`（161 项）。
+**要素标识符表（规约附录C）** — 101 项已全部收录。支持 HEX/BCD 引导符表 `SL651_ELEMENTS` 和 ASCⅡ 标识符表 `SL651_ASCII_ELEMENTS`（161 项）。**FF 子标识符**已收录北京水务平台自定义要素（GPRS信号、机箱温度、地温、垂线流速等）及水测家自定义要素。
 
 **负数 BCD 编码（规约 6.6.3.3a）**：首字节 `0xFF` 表示负数。
 
@@ -305,8 +305,10 @@ python web/app.py
 | `test_sl427_downlink` | SL427 | 下行帧解码 |
 | `test_sl427_param_settings` | SL427 | 设置地址/时钟/充值/IC卡 往返 |
 | `test_fujian_messages` | SL651 | **23 条福建规定真实报文 CRC 验证** |
+| `test_beijing_messages` | SL651 | **25 条北京水务平台真实报文 CRC 验证**（8测站/3类报文） |
+| `test_simulator_engine_smoke` | 模拟器 | 引擎冒烟测试 |
 
-**总计: 20 项**，全部通过。
+**总计: 24 项**，全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -320,6 +322,19 @@ python tools/decode_cli.py sl651 --file examples/fujian_messages.txt
 # 31(均匀报) / 32(定时报) / 33(加报报) / 34(小时报) / 35(人工置数)
 # 36 / 37(查询) / 38 / 3A / 40(修改配置) / 41(读取配置)
 # 42 / 43 / 45 / 46 / 47 / 48(恢复出厂) / 49(修改密码) / 4A(设置时钟) / 50 / 51
+```
+
+### 7.3 北京水务报文测试 ⭐
+
+来源：北京水务平台真实报文（2025-01）。
+
+```bash
+# 批量验证
+python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
+
+# 覆盖 25 条报文，8 个测站，3 类报文：
+# 32(定时报) / 33(加报报) / 34(小时报)
+# 含 7 个北京水务 FF 自定义子标识符：GPRS信号/机箱温度/地温/垂线流速等
 ```
 
 ---
@@ -342,6 +357,8 @@ python tools/decode_cli.py sl651 --file examples/fujian_messages.txt
 | 模拟器加报机制（雨量站/水位站触发） | ✅ |
 | ASCII 编码帧支持（SOH 起始，解码+编码） | ✅ |
 | 福建规定 23 条真实报文验证 | ✅ |
+| 北京水务平台 25 条真实报文验证 | ✅ |
+| 北京水务 FF 子标识符（GPRS信号/机箱温度/地温/垂线流速等 7 个） | ✅ |
 
 ### ✅ P3 — 已完成
 

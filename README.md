@@ -49,8 +49,8 @@ python tests/test_sl651.py
 
 ## 致谢
 
-本项目在 SL651/SL427 协议解析思路上参考了 [南京蓉水自动化技术研究所](http://njnrs.com) 的在线报文解析工具。
+本项目在 SL651/SL427 协议解析思路上部分参考了 [南京蓉水自动化技术研究所](http://njnrs.com) 的在线报文解析工具。
 
 ## 许可证
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)

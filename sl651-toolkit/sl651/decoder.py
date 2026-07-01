@@ -1,4 +1,4 @@
-"""SL651-2014 报文解码器（基于 njnrs 实现重构）。"""
+"""SL651-2014 报文解码器（部分参考 njnrs 解析思路）。"""
 
 from __future__ import annotations
 
@@ -131,7 +131,9 @@ def _safe_bcd_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
         return ("-", c)
     d = 10 ** decimals
     r = (-1 if neg else 1) * v / d
-    return (f"{r:.{decimals}f}", hex_str.upper())
+    if decimals == 0:
+        return (int(r), hex_str.upper())
+    return (r, hex_str.upper())
 
 
 def _safe_hex_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
@@ -149,7 +151,9 @@ def _safe_hex_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
         return ("-", c)
     d = 10 ** decimals
     r = (-1 if neg else 1) * v / d
-    return (f"{r:.{decimals}f}", hex_str.upper())
+    if decimals == 0:
+        return (int(r), hex_str.upper())
+    return (r, hex_str.upper())
 
 
 def _build_byte_map(bytes_list: list[int], direction: int, etx_pos: int) -> str:

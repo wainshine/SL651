@@ -198,7 +198,10 @@ class SL651Encoder:
                 body.extend(b'\xFF\xFF')
             else:
                 val = int(round(wl * 100))
-                body.extend(val.to_bytes(2, 'big'))
+                if val < 0:
+                    body.extend(b'\xFF\xFF')
+                else:
+                    body.extend(val.to_bytes(2, 'big'))
 
         body.append(0x39)
         body.append(_make_def_byte(4, 3))

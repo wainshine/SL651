@@ -1,6 +1,6 @@
 """SL651-2014 协议常量定义。
 
-基于《水文监测数据通信规约 SL651-2014》附录，参考 njnrs 实现。
+基于《水文监测数据通信规约 SL651-2014》附录，部分参考 njnrs 实现。
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
     return (b >> 3) & 0x1F, b & 0x07
 
 
-# ===== 要素标识符表 (101 条目，from njnrs) =====
+# ===== 要素标识符表 (101 条目，部分参考 njnrs) =====
 # key: 引导符 (1 字节的小写十六进制字符串)
 # value: (描述, 单位, 特殊数据类型)
 #   特殊数据类型:

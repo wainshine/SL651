@@ -38,8 +38,9 @@ python tools/decode_cli.py sl651 --hex "7E7E25XXXXXXXXXX00..."
 # SL427 解码
 python tools/decode_cli.py sl427 --hex "681568B4..."
 
-# 文件批量（含福建规定 23 条）
+# 文件批量（福建规定 23 条 / 北京水务 25 条）
 python tools/decode_cli.py sl651 --file examples/fujian_messages.txt
+python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 
 # JSON 输出
 python tools/decode_cli.py sl651 --hex "7E7E..." -o json
