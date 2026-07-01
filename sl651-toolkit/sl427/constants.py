@@ -88,13 +88,14 @@ CTRL_FUNC_MAP: dict[int, dict] = {
     0x04: {"name": "流速", "byteLen": 3, "decimal": 3, "signed": True, "array": True, "unit": "m/s"},
     0x05: {"name": "闸位", "byteLen": 3, "decimal": 2, "signed": False, "array": False, "unit": "m"},
     0x06: {"name": "功率", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "kW"},
-    0x07: {"name": "气压", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "hPa"},
-    0x08: {"name": "风速", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "m/s"},
+    0x07: {"name": "气象参数", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": ""},
+    0x08: {"name": "电量参数", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": ""},
     0x09: {"name": "水温", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "°C"},
     0x0A: {"name": "水质", "byteLen": 3, "decimal": 0, "signed": True, "array": True, "unit": ""},
     0x0B: {"name": "土壤含水率", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "%"},
     0x0C: {"name": "蒸发量", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "mm"},
     0x0D: {"name": "电压", "byteLen": 2, "decimal": 2, "signed": False, "array": False, "unit": "V"},
+    # TODO: 0x0D 在规约不同上下文中含义不同（下行=报警或状态参数, 上行=统计雨量, AFN=84H=电压），当前沿用 njnrs 标签"电压"，待梳理统一
     0x0E: {"name": "综合参数", "byteLen": 1, "decimal": 0, "signed": False, "array": False, "unit": ""},
     0x0F: {"name": "水压", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "MPa"},
 }
