@@ -237,11 +237,12 @@ def test_sl651_downlink_frames() -> None:
     print(">>> SL651 下行帧编码")
     encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
     decoder = SL651Decoder()
-    # 查询帧 (0x37, 结束符 ENQ)
-    f = encoder.build_query_frame([0x39, 0x38])
+    # 查询帧 (0x37, 表42: 仅流水号+发报时间=8B, 结束符 ENQ)
+    f = encoder.build_query_frame()
     r = decoder.decode(f)
     assert r.crc_ok and r.function_code == 0x37
     assert r.direction == 1
+    assert r.body_length == 8, f"查询帧正文应为8字节, 实际{r.body_length}"
     # 验证结束符为 ENQ
     end_byte = list(f)[-3]  # CRC前1字节
     assert end_byte == ENQ, f"查询帧结束符应为ENQ(05H)，实际 {end_byte:02X}H"
@@ -249,10 +250,13 @@ def test_sl651_downlink_frames() -> None:
     f = encoder.build_set_param_frame([(0x39, 12.345, 4, 3)])
     r = decoder.decode(f)
     assert r.crc_ok and r.function_code == 0x40
-    # 校时帧 (0x4A)
-    f = encoder.build_clock_sync_frame(datetime(2025, 6, 1, 12, 0, 0))
+    # 校时帧 (0x4A, 表67: 发报时间即校时值)
+    sync_dt = datetime(2025, 6, 1, 12, 0, 0)
+    f = encoder.build_clock_sync_frame(sync_dt)
     r = decoder.decode(f)
     assert r.crc_ok and r.function_code == 0x4A
+    assert r.body_length == 8, f"校时帧正文应为8字节, 实际{r.body_length}"
+    # 上行帧结束符应为 ETX
     # 上行帧结束符应为 ETX
     f_up = encoder.build_timing_frame([(0x39, 12.345, 4, 3)])
     assert list(f_up)[-3] == 0x03, f"上行帧结束符应为ETX(03H)"
@@ -291,8 +295,27 @@ def test_sl427_param_settings() -> None:
 
 def test_sl651_ascii() -> None:
     from datetime import datetime
-    print(">>> SL651 ASCII 编解码")
+    print(">>> SL651 新 ASCII 编解码")
     encoder = SL651Encoder(center_addr=0x01, station_addr="00418D2337", password=0, station_type=0x48)
+    decoder = SL651Decoder()
+    f = encoder.build_ascii_frame(
+        [("Z", "12.345"), ("Q", "5.678"), ("VT", "12.6")],
+        obs_time=datetime(2025, 6, 1, 12, 0),
+    )
+    r = decoder.decode(f)
+    assert r.crc_ok, f"CRC 失败: calc={r.crc_calculated:04X} recv={r.crc_received:04X}"
+    assert r.encoding == "ASCII", f"编码类型应为 ASCII，实际 {r.encoding}"
+    codes = {e.code: e.value for e in r.elements}
+    assert codes.get("Z") == 12.345, f"Z = {codes.get('Z')}"
+    assert codes.get("VT") == 12.6, f"VT = {codes.get('VT')}"
+    assert codes.get("Q") == 5.678, f"Q = {codes.get('Q')}"
+    print("    OK")
+
+
+def test_sl651_ascii_roundtrip() -> None:
+    from datetime import datetime
+    print(">>> SL651 新 ASCII 往返测试")
+    encoder = SL651Encoder(center_addr=0x37, station_addr="1234567890", password=0xABCD, station_type=0x48)
     decoder = SL651Decoder()
     f = encoder.build_ascii_frame(
         [("Z", "12.345"), ("Q", "5.678"), ("VT", "12.6")],
@@ -301,8 +324,16 @@ def test_sl651_ascii() -> None:
     r = decoder.decode(f)
     assert r.crc_ok
     assert r.encoding == "ASCII"
+    assert r.center_addr == "37"
+    assert r.station_addr == "1234567890"
+    assert r.password == "ABCD"
+    assert r.function_code == 0x32
+    assert r.direction == 0
+    assert r.station_type_name == "河道"
+    assert len(r.elements) == 3
     codes = {e.code: e.value for e in r.elements}
     assert codes.get("Z") == 12.345
+    assert codes.get("Q") == 5.678
     assert codes.get("VT") == 12.6
     print("    OK")
 
@@ -458,6 +489,7 @@ def main() -> int:
         test_sl427_address_encoding, test_sl427_tp_encoding,
         test_sl427_c0_signed_value, test_sl427_invalid_l, test_sl427_downlink,
         test_sl651_downlink_frames, test_sl427_param_settings, test_sl651_ascii,
+        test_sl651_ascii_roundtrip,
         test_fujian_messages,
         test_simulator_engine_smoke, test_hourly_frame_validation, test_recharge_le_bcd,
         test_beijing_messages,

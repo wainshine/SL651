@@ -24,7 +24,7 @@ def test_hourly_roundtrip_12():
     assert r.crc_ok, "CRC 应通过"
     assert r.function_code == 0x34, f"功能码应为0x34, 实际{hex(r.function_code)}"
     # 应有: 12×F5水位 + 1×39瞬时水位 + 1×38电压 = 14
-    f5_count = sum(1 for e in r.elements if e.code.startswith("f"))
+    f5_count = sum(1 for e in r.elements if e.code.startswith("F"))
     assert f5_count == 12, f"F5水位应有12个, 实际{f5_count}"
     has_39 = any(e.code == "39" for e in r.elements)
     has_38 = any(e.code == "38" for e in r.elements)
@@ -116,7 +116,7 @@ def test_sl427_12_roundtrip():
     """SL427 AFN=0x12 设置工作模式 往返"""
     addr = encode_address(method=1, admin_code=110108, stn_id=1284)
     enc = SL427Encoder(addr)
-    for mode, mode_name in [(0, "自报"), (1, "查询"), (2, "兼容"), (3, "调试")]:
+    for mode, mode_name in [(0, "兼容"), (1, "自报"), (2, "查询"), (3, "调试")]:
         f = enc.build_set_work_mode(mode)
         r = SL427Decoder().decode(f)
         assert r.crc_ok, f"模式{mode}({mode_name}) CRC应通过"
@@ -132,9 +132,9 @@ def test_sl427_84_voltage_values():
         f = enc.build_self_report_84(voltage=v, tp=datetime(2026, 6, 1, 12, 0))
         r = SL427Decoder().decode(f)
         assert r.crc_ok
-        volt_elems = [e for e in r.elements if e.name == "电池电压"]
+        volt_elems = [e for e in r.elements if e.name == "电压"]
         if volt_elems:
-            actual = volt_elems[0].value
+            actual = float(volt_elems[0].value) if isinstance(volt_elems[0].value, str) else volt_elems[0].value
             if abs(actual - v) > 0.02:
                 print(f"  ❌ 电压值不对: 输入{v}, 解码{actual}")
                 FAILURES.append(f"AFN=0x84 电压值 {v}→{actual}")

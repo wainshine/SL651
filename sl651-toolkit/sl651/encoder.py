@@ -55,9 +55,6 @@ class SL651Encoder:
         self.station_type = station_type & 0xFF
         self._serial = int(datetime.now().timestamp()) % 65535 + 1
 
-    def _next_serial(self) -> int:
-        self._serial = (self._serial + 1) % 65535 or 1
-        return self._serial
 
     def build_frame(
         self,
@@ -66,20 +63,33 @@ class SL651Encoder:
         direction: int = C.DIR_UPLINK,
         ascii_mode: bool = False,
         end_marker: int | None = None,
+        tx_time: datetime | None = None,
     ) -> bytes:
         """构造完整 SL651 帧。
 
         ascii_mode=True 时使用 SOH(01H) 起始符（ASCⅡ编码）。
         end_marker: 报文结束符，上行默认 ETX(03H)，下行按帧类型选 ENQ/ACK/EOT/NAK/ESC。
+        tx_time: 发报时间，默认当前时间。下行 4AH 校时帧传此值作为校时时钟。
         """
         if end_marker is None:
             end_marker = C.ETX
-        now = datetime.now()
-        tx_time = datetime_to_bcd(now)
-        serial = self._next_serial()
+
+        is_downlink = direction == C.DIR_DOWNLINK
+        if tx_time is not None:
+            actual_tx_time = datetime_to_bcd(tx_time)
+        else:
+            actual_tx_time = datetime_to_bcd(datetime.now())
+
+        if is_downlink:
+            serial = 0
+        elif function_code == 0x2F:
+            serial = self._serial
+        else:
+            self._serial = (self._serial % 65535) + 1
+            serial = self._serial
 
         body_len = C.SERIAL_LEN + C.TX_TIME_LEN + len(body)
-        ident_hi = (direction << 7) | ((body_len >> 8) & 0x7F)
+        ident_hi = (direction << 7) | ((body_len >> 8) & 0x0F)
         ident_lo = body_len & 0xFF
 
         header_body = bytearray()
@@ -98,7 +108,7 @@ class SL651Encoder:
         header_body.append(C.STX)
         header_body.append((serial >> 8) & 0xFF)
         header_body.append(serial & 0xFF)
-        header_body.extend(tx_time)
+        header_body.extend(actual_tx_time)
         header_body.extend(body)
         header_body.append(end_marker)
 
@@ -158,26 +168,9 @@ class SL651Encoder:
         self,
         elements: list[tuple[int, float, int, int]],
         obs_time: datetime | None = None,
+        trigger: tuple[int, float, int, int] | None = None,
     ) -> bytes:
-        return self.build_timing_body(elements, obs_time)
-
-    def build_alarm_frame(
-        self,
-        elements: list[tuple[int, float, int, int]],
-        obs_time: datetime | None = None,
-    ) -> bytes:
-        return self.build_frame(0x33, self.build_alarm_body(elements, obs_time))
-
-    def build_hourly_body(
-        self,
-        water_levels: list[float | None],
-        inst_level: float,
-        voltage: float,
-        obs_time: datetime | None = None,
-    ) -> bytes:
-        """构造上行小时报正文。规约 §6.6.4.7 表36 固定 12 组 5min 水位。"""
-        if len(water_levels) != 12:
-            raise EncodeError(f"小时报要求恰好 12 组水位，当前 {len(water_levels)} 组")
+        """构造上行加报报正文。trigger 为触发要素(引导符,值,字节数,小数位)，放在正文首部（表34）。"""
         if obs_time is None:
             obs_time = datetime.now()
         ot = datetime_to_bcd(obs_time)[:5]
@@ -190,6 +183,68 @@ class SL651Encoder:
         body.append(0xF0)
         body.append(0xF0)
         body.extend(ot)
+
+        if trigger:
+            guide, value, data_len, decimals = trigger
+            body.append(guide)
+            body.append(_make_def_byte(data_len, decimals))
+            body.extend(_encode_bcd(value, data_len, decimals))
+
+        for guide, value, data_len, decimals in elements:
+            body.append(guide)
+            body.append(_make_def_byte(data_len, decimals))
+            body.extend(_encode_bcd(value, data_len, decimals))
+
+        return bytes(body)
+
+    def build_alarm_frame(
+        self,
+        elements: list[tuple[int, float, int, int]],
+        obs_time: datetime | None = None,
+        trigger: tuple[int, float, int, int] | None = None,
+    ) -> bytes:
+        return self.build_frame(0x33, self.build_alarm_body(elements, obs_time, trigger))
+
+    def build_hourly_body(
+        self,
+        water_levels: list[float | None],
+        inst_level: float,
+        voltage: float,
+        obs_time: datetime | None = None,
+        rain_amounts: list[float | None] | None = None,
+    ) -> bytes:
+        """构造上行小时报正文。规约 §6.6.4.7 表36 固定 12 组 5min 水位。
+        rain_amounts: 可选 12 组 5min 雨量（F4，各 2B，单位 0.1mm）。
+        """
+        if len(water_levels) != 12:
+            raise EncodeError(f"小时报要求恰好 12 组水位，当前 {len(water_levels)} 组")
+        if rain_amounts is not None and len(rain_amounts) != 12:
+            raise EncodeError(f"小时报雨量要求恰好 12 组，当前 {len(rain_amounts)} 组")
+        if obs_time is None:
+            obs_time = datetime.now()
+        ot = datetime_to_bcd(obs_time)[:5]
+
+        body = bytearray()
+        body.append(0xF1)
+        body.append(0xF1)
+        body.extend(self.station_addr_bytes)
+        body.append(self.station_type)
+        body.append(0xF0)
+        body.append(0xF0)
+        body.extend(ot)
+
+        if rain_amounts is not None:
+            body.append(0xF4)
+            body.append(_make_def_byte(24, 1))
+            for rn in rain_amounts:
+                if rn is None:
+                    body.extend(b'\xFF\xFF')
+                else:
+                    val = int(round(rn * 10))
+                    if val < 0:
+                        body.extend(b'\xFF\xFF')
+                    else:
+                        body.extend(val.to_bytes(2, 'big'))
 
         body.append(0xF5)
         body.append(_make_def_byte(24, 2))
@@ -219,24 +274,25 @@ class SL651Encoder:
         inst_level: float,
         voltage: float,
         obs_time: datetime | None = None,
+        rain_amounts: list[float | None] | None = None,
     ) -> bytes:
-        return self.build_frame(0x34, self.build_hourly_body(water_levels, inst_level, voltage, obs_time))
+        return self.build_frame(0x34, self.build_hourly_body(water_levels, inst_level, voltage, obs_time, rain_amounts))
 
     # ------------------------------------------------------------------
     # 下行帧（中心站 → 遥测站）
     # ------------------------------------------------------------------
 
     def build_query_body(self, element_guides: list[int]) -> bytes:
-        """查询帧正文：列出要查询的要素引导符+定义符（数据域为空）。"""
+        """查询指定要素正文（3AH 功能码）：列出要查询的要素引导符+定义符（数据域为空）。"""
         body = bytearray()
         for guide in element_guides:
             body.append(guide)
             body.append(_make_def_byte(0, 0))  # 查询时数据域长度为0
         return bytes(body)
 
-    def build_query_frame(self, element_guides: list[int]) -> bytes:
-        """查询要素帧（下行，0x37，结束符 ENQ）。"""
-        return self.build_frame(0x37, self.build_query_body(element_guides),
+    def build_query_frame(self) -> bytes:
+        """查询实时数据帧（下行，0x37，表42：仅流水号+发报时间，结束符 ENQ）。"""
+        return self.build_frame(0x37, b"",
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_set_param_body(self, params: list[tuple[int, float, int, int]]) -> bytes:
@@ -254,19 +310,19 @@ class SL651Encoder:
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
-        """时钟校准正文：6 字节 BCD 时间。"""
-        if dt is None:
-            dt = datetime.now()
-        return datetime_to_bcd(dt)
+        """时钟校准正文（0x4A 表67）：空，发报时间即校时值。"""
+        return b""
 
     def build_clock_sync_frame(self, dt: datetime | None = None) -> bytes:
-        """时钟校准帧 (0x4A, 下行, 结束符 ENQ)。"""
-        return self.build_frame(0x4A, self.build_clock_sync_body(dt),
-                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
+        """时钟校准帧 (0x4A, 下行, 结束符 ENQ, 表67)。
+        tx_time 直接作为校时时钟值。"""
+        return self.build_frame(0x4A, b"",
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ,
+                                tx_time=dt)
 
     def build_reset_body(self) -> bytes:
-        """复位帧正文：空。"""
-        return b""
+        """恢复出厂设置正文（表63+D.4#121）：包含 98H 标识符。"""
+        return b'\x98'
 
     def build_reset_frame(self) -> bytes:
         """恢复出厂设置帧 (0x48, 下行, 结束符 ENQ)。"""
@@ -291,15 +347,15 @@ class SL651Encoder:
             obs_time = datetime.now()
 
         parts = []
-        parts.append("F1F1")
+        parts.append("ST")
         parts.append(self.station_addr_hex)
         parts.append(f"{self.station_type:02X}")
-        parts.append("F0F0")
+        parts.append("TT")
         parts.append(obs_time.strftime("%y%m%d%H%M"))
         for code, val in elements:
             parts.append(code)
             parts.append(val)
-        parts.append("")  # 末尾空格（规约要求）
+        parts.append("")
 
         return " ".join(parts).encode("ascii")
 
@@ -309,6 +365,36 @@ class SL651Encoder:
         obs_time: datetime | None = None,
         function_code: int = 0x32,
     ) -> bytes:
-        """构造 ASCⅡ 编码帧（SOH 起始）。"""
-        body = self.build_ascii_body(elements, obs_time)
-        return self.build_frame(function_code, body, ascii_mode=True)
+        """构造 ASCⅡ 编码帧（单 SOH 起始，头部为 ASCII 十六进制字符串，规格表16）。"""
+        if obs_time is None:
+            obs_time = datetime.now()
+
+        self._serial = (self._serial % 65535) + 1
+        serial = self._serial
+
+        actual_tx_time = datetime_to_bcd(datetime.now())
+
+        body_ascii = self.build_ascii_body(elements, obs_time)
+        serial_hex = f"{serial:04X}".encode("ascii")
+        tx_time_hex = actual_tx_time.hex().upper().encode("ascii")
+        body_stx_etx = serial_hex + tx_time_hex + body_ascii
+
+        body_len = C.ASCII_SERIAL_LEN + C.ASCII_TX_TIME_LEN + len(body_ascii)
+        ident_hi = (C.DIR_UPLINK << 7) | ((body_len >> 8) & 0x7F)
+        ident_lo = body_len & 0xFF
+
+        frame = bytearray()
+        frame.append(C.SOH)
+        frame.extend(f"{self.center_addr:02X}".encode("ascii"))
+        frame.extend(self.station_addr_hex.encode("ascii"))
+        frame.extend(f"{self.password:04X}".encode("ascii"))
+        frame.extend(f"{function_code:02X}".encode("ascii"))
+        frame.extend(f"{ident_hi:02X}{ident_lo:02X}".encode("ascii"))
+        frame.append(C.STX)
+        frame.extend(body_stx_etx)
+        frame.append(C.ETX)
+
+        crc = crc16(bytes(frame))
+        frame.extend(f"{crc:04X}".encode("ascii"))
+
+        return bytes(frame)

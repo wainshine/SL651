@@ -132,10 +132,18 @@ class SL427Encoder:
         self,
         func_code: int,
         data: bytes,
+        alarm: int = 0,
+        state: int = 0,
     ) -> bytes:
-        """查询响应帧 (AFN=B0H, 无AUX)。"""
+        """查询响应帧 (AFN=B0H, 无AUX)。
+
+        规范7.3.22：数据域最后4B=报警状态(2B)+终端机状态(2B)。
+        """
+        payload = bytearray(data)
+        payload.extend(alarm.to_bytes(2, "little"))
+        payload.extend(state.to_bytes(2, "little"))
         ctrl = C.make_ctrl(dir_=1, func_code=func_code)
-        return self.build_frame(0xB0, ctrl, data)
+        return self.build_frame(0xB0, ctrl, bytes(payload))
 
     def build_self_report_81(
         self,
@@ -147,10 +155,11 @@ class SL427Encoder:
     ) -> bytes:
         """自报告警数据帧 (AFN=81H, AUX=仅Tp)。
 
-        data + alarm(2B BIN) + state(2B BIN) + Tp(7B)
+        规范7.5.2：alarm(2B BIN) + data + state(2B BIN) + Tp(7B)
         """
-        payload = bytearray(data)
+        payload = bytearray()
         payload.extend(alarm.to_bytes(2, "little"))
+        payload.extend(data)
         payload.extend(state.to_bytes(2, "little"))
         tp_bytes = encode_tp(tp, delay=0)
         ctrl = C.make_ctrl(dir_=1, func_code=func_code)
@@ -182,16 +191,12 @@ class SL427Encoder:
     ) -> bytes:
         """自报电压帧 (AFN=84H, AUX=仅Tp)。
 
-        数据域: 电压(2B BCD LE) + alarm(2B) + state(2B) + Tp(7B)
+        规范7.5.5/表B.98：数据域仅 2B BCD 电压值，不含 alarm/state。
         """
         v = int(round(voltage * 100))
-        v_data = bytes(reversed(int_to_bcd_bytes(v, 2)))
-        payload = bytearray(v_data)
-        payload.extend((0).to_bytes(2, "little"))
-        payload.extend((0).to_bytes(2, "little"))
-        tp_bytes = encode_tp(tp, delay=0)
+        data = bytes(reversed(int_to_bcd_bytes(v, 2)))
         ctrl = C.make_ctrl(dir_=1, func_code=0x0D)
-        return self.build_frame(0x84, ctrl, bytes(payload), tp=tp_bytes)
+        return self.build_frame(0x84, ctrl, data)
 
     def build_param_set_frame(
         self,
@@ -203,7 +208,7 @@ class SL427Encoder:
     ) -> bytes:
         """通用参数设置帧 (AFN=10H~4FH, AUX=PW+Tp, 下行)。"""
         ctrl = C.make_ctrl(dir_=0, func_code=func_code)
-        pw_bytes = pw.to_bytes(2, "little")
+        pw_bytes = C.encode_pw(0, pw)
         return self.build_frame(afn, ctrl, data, tp=encode_tp(tp), pw=pw_bytes)
 
     # ------------------------------------------------------------------

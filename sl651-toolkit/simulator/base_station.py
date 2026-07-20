@@ -13,7 +13,9 @@ class BaseStation(ABC):
 
     def __init__(self, station_addr: str, station_type: int | None = None) -> None:
         self.station_addr = station_addr
-        self.station_addr_hex = station_addr if len(station_addr) == 10 else ""
+        if len(station_addr) != 10:
+            raise ValueError(f"station_addr 必须为 10 位十六进制字符串，当前: {station_addr!r}")
+        self.station_addr_hex = station_addr
         if station_type is not None:
             self.STATION_TYPE = station_type
         self.tick = 0

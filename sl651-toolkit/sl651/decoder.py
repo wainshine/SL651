@@ -243,8 +243,8 @@ class SL651Decoder:
             raise DecodeError("报文包含非十六进制字符")
         if len(cleaned) % 2 != 0:
             raise DecodeError("报文长度不是偶数")
-        if cleaned[:4].upper() not in ("7E7E", "0101"):
-            raise DecodeError("报文不是以 7E7E(HEX/BCD) 或 0101(ASCII) 开头")
+        if cleaned[:4].upper() not in ("7E7E", "0101") and cleaned[:2].upper() != "01":
+            raise DecodeError("报文不是以 7E7E(HEX/BCD)、0101(旧ASCII) 或 01(ASCII) 开头")
         return self.decode(bytes.fromhex(cleaned))
 
     def decode(self, frame: bytes) -> DecodedMessage:
@@ -254,10 +254,108 @@ class SL651Decoder:
         bytes_list = list(frame)
         total = len(bytes_list)
         is_ascii = frame[0] == C.SOH
+        is_new_ascii = is_ascii and len(frame) > 1 and frame[1] != C.SOH
+
+        if is_new_ascii:
+            return self._decode_new_ascii(frame, bytes_list, total)
+
+        return self._decode_binary(frame, bytes_list, total)
+
+    def _decode_new_ascii(self, frame: bytes, bytes_list: list[int], total: int) -> DecodedMessage:
+        if total < C.ASCII_DATA_OFFSET + 3:
+            raise DecodeError(f"ASCII 报文太短: {total} 字节")
+
+        center = int(frame[1:3].decode("ascii"), 16)
+        station_addr = frame[3:13].decode("ascii")
+        station_raw = bytes.fromhex(station_addr)
+        password = int(frame[13:17].decode("ascii"), 16)
+        func = int(frame[17:19].decode("ascii"), 16)
+        ident_raw = int(frame[19:23].decode("ascii"), 16)
+        ident_hi = (ident_raw >> 8) & 0xFF
+        ident_lo = ident_raw & 0xFF
+        direction = (ident_hi >> 7) & 1
+        body_len = ((ident_hi & 0x0F) << 8) | ident_lo
+
+        stx = frame[C.ASCII_STX_OFFSET]
+        if stx != C.STX:
+            raise DecodeError(f"ASCII 报文 STX 应为 02H，实际 {stx:02X}H")
+
+        serial_raw = int(frame[24:28].decode("ascii"), 16)
+        serial_hex_str = f"{serial_raw:04X}"
+
+        tx_time_bytes = bytes.fromhex(frame[28:40].decode("ascii"))
+        tx_hex_str = bytes_to_hex_compact(tx_time_bytes)
+
+        etx_pos = C.ASCII_BODY_OFFSET + body_len
+        if etx_pos + C.ASCII_CRC_LEN >= total:
+            raise DecodeError(f"ASCII 正文长度 {body_len} 与总长 {total} 不匹配")
+
+        if frame[etx_pos] != C.ETX:
+            raise DecodeError(f"ASCII 报文 ETX 应为 03H，实际 {frame[etx_pos]:02X}H")
+
+        crc_data = bytes(frame[:etx_pos + 1])
+        calc_crc = crc16(crc_data)
+        recv_crc = int(frame[etx_pos + 1:etx_pos + 1 + C.ASCII_CRC_LEN].decode("ascii"), 16)
+
+        data_bytes = bytes(bytes_list[C.ASCII_DATA_OFFSET:etx_pos])
+
+        func_name = C.FUNC_MAP.get(func, f"未知(0x{func:02X})")
+        is_uniform = func == 0x31
+        encoding = "ASCII"
+        direction_label = "上行（遥测站→中心站）" if direction == 0 else "下行（中心站→遥测站）"
+
+        pwd_hex = f"{password:04X}"
+        tx_display = _fmt_bcd_time_sec(tx_hex_str)
+
+        stn_type_hex = ""
+        stn_type_name = ""
+        obs_hex = ""
+        obs_display = ""
+
+        elements = self._parse_ascii_elements(data_bytes)
+        if elements:
+            obs_hex, obs_display, stn_type_hex, stn_type_name = \
+                self._extract_ascii_times(data_bytes, station_raw)
+
+        byte_map = _build_byte_map(bytes_list, direction, etx_pos) if False else ""
+        byte_table = _build_byte_table(bytes_list, direction, etx_pos) if False else []
+
+        return DecodedMessage(
+            hex_input=bytes_to_hex_compact(frame),
+            center_addr=f"{center:02X}",
+            station_addr=station_addr,
+            password=pwd_hex,
+            function_code=func,
+            function_name=func_name,
+            message_type=func_name,
+            direction=direction,
+            direction_label=direction_label,
+            body_length=body_len,
+            serial=serial_hex_str,
+            tx_time=tx_hex_str,
+            tx_time_display=tx_display,
+            station_type=stn_type_hex,
+            station_type_name=stn_type_name,
+            obs_time=obs_hex,
+            obs_time_display=obs_display,
+            is_uniform=is_uniform,
+            encoding=encoding,
+            crc_received=recv_crc,
+            crc_calculated=calc_crc,
+            crc_ok=calc_crc == recv_crc,
+            elements=elements,
+            byte_map=byte_map,
+            byte_table=byte_table,
+            raw_frame=frame,
+            frame_length=total,
+        )
+
+    def _decode_binary(self, frame: bytes, bytes_list: list[int], total: int) -> DecodedMessage:
+        is_ascii = frame[0] == C.SOH
         ident_hi = bytes_list[11]
         ident_lo = bytes_list[12]
         direction = (ident_hi >> 7) & 1
-        body_len = ((ident_hi & 0x7F) << 8) | ident_lo
+        body_len = ((ident_hi & 0x0F) << 8) | ident_lo
         stx = bytes_list[C.STX_OFFSET]
 
         # 表11(上行): [7E7E][中心站址][遥测站址]; 表12(下行): [7E7E][遥测站址][中心站址]
@@ -273,9 +371,11 @@ class SL651Decoder:
         if stx not in (C.STX, C.SYN):
             raise DecodeError(f"报文起始符应为 02H(STX) 或 16H(SYN)，实际 {stx:02X}H")
 
-        serial = bytes_list[C.BODY_OFFSET:C.BODY_OFFSET + C.SERIAL_LEN]
-        tx_time_bytes = bytes(bytes_list[C.BODY_OFFSET + C.SERIAL_LEN:
-                                         C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN])
+        syn_pad = 3 if stx == C.SYN else 0  # SYN 多包帧: 包总数(1B)+序列号(1B)+包长度(1B)
+        body_start = C.BODY_OFFSET + syn_pad
+        serial = bytes_list[body_start: body_start + C.SERIAL_LEN]
+        tx_time_bytes = bytes(bytes_list[body_start + C.SERIAL_LEN:
+                                         body_start + C.SERIAL_LEN + C.TX_TIME_LEN])
         etx_pos = C.BODY_OFFSET + body_len
 
         if etx_pos + 2 >= total:
@@ -298,29 +398,30 @@ class SL651Decoder:
 
         if direction == 0 and not is_ascii:
             # 上行 HEX/BCD: 表11 结构 — 偏移22/30有 F1F1/F0F0 标识
+            f1_pos = C.F1_OFFSET + syn_pad
+            f0_pos = C.F0_OFFSET + syn_pad
             can_parse_stn = (
-                bytes_list[C.F1_OFFSET] == 0xF1 and bytes_list[C.F1_OFFSET + 1] == 0xF1 and
-                bytes_list[C.F0_OFFSET] == 0xF0 and bytes_list[C.F0_OFFSET + 1] == 0xF0
+                bytes_list[f1_pos] == 0xF1 and bytes_list[f1_pos + 1] == 0xF1 and
+                bytes_list[f0_pos] == 0xF0 and bytes_list[f0_pos + 1] == 0xF0
             )
             if can_parse_stn:
-                stn_code = bytes(bytes_list[C.STN_CODE_OFFSET:C.STN_CODE_OFFSET + 5])
-                stn_type = bytes_list[C.STN_TYPE_OFFSET]
+                stn_code = bytes(bytes_list[C.STN_CODE_OFFSET + syn_pad:C.STN_CODE_OFFSET + 5 + syn_pad])
+                stn_type = bytes_list[C.STN_TYPE_OFFSET + syn_pad]
                 stn_type_hex = f"{stn_type:02X}"
                 stn_type_name = C.STATION_TYPE.get(stn_type, "未知")
-                obs_time_bytes = bytes(bytes_list[C.OBS_TIME_OFFSET:
-                                                   C.OBS_TIME_OFFSET + C.OBS_TIME_LEN])
-                data_start = C.UPLINK_DATA_OFFSET
+                obs_time_bytes = bytes(bytes_list[C.OBS_TIME_OFFSET + syn_pad:
+                                                    C.OBS_TIME_OFFSET + C.OBS_TIME_LEN + syn_pad])
+                data_start = C.UPLINK_DATA_OFFSET + syn_pad
             else:
                 stn_code = bytes(station_raw)
-                data_start = C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN
+                data_start = body_start + C.SERIAL_LEN + C.TX_TIME_LEN
         elif is_ascii:
-            # ASCII 编码: 正文为 ASCⅡ 文本，起始于流水号+发报时间之后
             stn_code = bytes(station_raw)
-            data_start = C.BODY_OFFSET + C.SERIAL_LEN + C.TX_TIME_LEN
+            data_start = body_start + C.SERIAL_LEN + C.TX_TIME_LEN
         else:
             stn_code = bytes(station_raw)
-            obs_time_bytes = b"\x00" * C.OBS_TIME_LEN
-            data_start = C.DOWNLINK_DATA_OFFSET
+            obs_time_bytes = b""
+            data_start = C.DOWNLINK_DATA_OFFSET + syn_pad
 
         station_addr = bytes_to_hex_compact(stn_code) if stn_code else ""
         obs_hex = bytes_to_hex_compact(obs_time_bytes) if obs_time_bytes else ""
@@ -391,7 +492,7 @@ class SL651Decoder:
                 continue
 
             if code == "f0" and def_hex == "f0":
-                pos += 12  # F1F1信息组=标识(2B)+站址(5B)+分类(1B), 已读2B标识, 跳6B
+                pos += 10  # F0F0信息组=标识(2B)+观测时间(5B), 已读2B标识, 跳5B
                 continue
             if code == "f1" and def_hex == "f1":
                 pos += 12
@@ -455,19 +556,19 @@ class SL651Decoder:
         ascii_text = data.decode("ascii", errors="replace").strip()
         tokens = ascii_text.split()
         i = 0
-        # Skip F1F1 section: F1F1 + stn_code + stn_type
-        if i < len(tokens) and tokens[i].upper() == "F1F1":
-            i += 3  # F1F1, stn_code_hex, stn_type_hex
-        # Skip F0F0 section: F0F0 + obs_time
-        if i < len(tokens) and tokens[i].upper() == "F0F0":
-            i += 2  # F0F0, obs_time_hex
+        # Skip ST section: ST/F1F1 + stn_code + stn_type
+        if i < len(tokens) and tokens[i].upper() in ("F1F1", "ST"):
+            i += 3
+        # Skip TT section: TT/F0F0 + obs_time
+        if i < len(tokens) and tokens[i].upper() in ("F0F0", "TT"):
+            i += 2
 
         while i + 1 < len(tokens):
             code = tokens[i]
             value_str = tokens[i + 1]
             entry = C.SL651_ASCII_ELEMENTS.get(code.upper())
 
-            if code.upper() in ("F1F1", "F0F0"):
+            if code.upper() in ("F1F1", "F0F0", "ST", "TT"):
                 i += 1
                 continue
             
@@ -492,6 +593,33 @@ class SL651Decoder:
             i += 2
         return elements
 
+    def _extract_ascii_times(
+        self, data: bytes, station_raw: bytes
+    ) -> tuple[str, str, str, str]:
+        ascii_text = data.decode("ascii", errors="replace").strip()
+        tokens = ascii_text.split()
+        i = 0
+        stn_type_hex = ""
+        stn_type_name = ""
+        obs_hex = ""
+        obs_display = ""
+
+        if i < len(tokens) and tokens[i].upper() in ("F1F1", "ST"):
+            # tokens[i+1] = station code, tokens[i+2] = station type hex
+            if i + 2 < len(tokens):
+                stn_type_hex = tokens[i + 2]
+                stn_type = int(stn_type_hex, 16) if len(stn_type_hex) == 2 else 0
+                stn_type_name = C.STATION_TYPE.get(stn_type, "未知")
+            i += 3
+
+        if i < len(tokens) and tokens[i].upper() in ("F0F0", "TT"):
+            if i + 1 < len(tokens):
+                obs_time_str = tokens[i + 1]
+                obs_hex = obs_time_str
+                obs_display = _fmt_bcd_time_nosec(obs_time_str)
+
+        return obs_hex, obs_display, stn_type_hex, stn_type_name
+
     @staticmethod
     def _parse_80(def_byte: int, hex_str: str, pos: int, d_len: int) -> ElementValue:
         d_dec = def_byte & 0x07
@@ -508,6 +636,7 @@ class SL651Decoder:
 
     @staticmethod
     def _parse_status(raw_hex: str, f_len: int) -> list[ElementValue]:
+        """解析 45H 状态报警。注：当前缩减为 12 位，规范表58 为 4B/32 位。"""
         try:
             sv = int(raw_hex, 16)
         except ValueError:

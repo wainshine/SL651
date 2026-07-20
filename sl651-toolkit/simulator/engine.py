@@ -107,7 +107,7 @@ class SimulatorEngine:
         station: BaseStation,
         center_addr: int = 1,
         password: int = 0,
-        station_type: int = 0x48,
+        station_type: int = 0,
         interval: float = 300.0,
         function_code: int = 0x32,
         enable_alert: bool = False,

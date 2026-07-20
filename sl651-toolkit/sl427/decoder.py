@@ -98,21 +98,46 @@ def _parse_ctrl_func_data(func_code: int, data_bytes: bytes) -> list[ElementValu
                 break
             continue
 
-        if definition["signed"]:
+        if all(b == 0xAA for b in chunk):
+            if not definition["array"]:
+                break
+            continue
+
+        if func_code == 0x03:
+            display, raw, unit_str = _parse_flow(chunk, definition["decimal"])
+            items.append(ElementValue(
+                name=definition["name"],
+                value=display,
+                unit=unit_str,
+                raw=raw,
+                byte_len=item_len,
+                decimal=definition["decimal"],
+                signed=definition["signed"],
+            ))
+        elif definition["signed"]:
             result = _parse_signed_bcd(chunk, definition["decimal"])
+            result_unit = definition["unit"]
+            items.append(ElementValue(
+                name=definition["name"],
+                value=result[0],
+                unit=result_unit,
+                raw=result[1],
+                byte_len=item_len,
+                decimal=definition["decimal"],
+                signed=definition["signed"],
+            ))
         else:
             v = bcd_bytes_to_int_le(chunk)
             result = (f"{v / (10 ** definition['decimal']):.{definition['decimal']}f}", hex_str)
-
-        items.append(ElementValue(
-            name=definition["name"],
-            value=result[0],
-            unit=definition["unit"],
-            raw=result[1],
-            byte_len=item_len,
-            decimal=definition["decimal"],
-            signed=definition["signed"],
-        ))
+            items.append(ElementValue(
+                name=definition["name"],
+                value=result[0],
+                unit=definition["unit"],
+                raw=result[1],
+                byte_len=item_len,
+                decimal=definition["decimal"],
+                signed=definition["signed"],
+            ))
         if not definition["array"]:
             break
 
@@ -131,11 +156,31 @@ def _parse_signed_bcd(data: bytes, decimal: int) -> tuple[str, str]:
     return (f"{r:.{decimal}f}", bytes_to_hex_compact(data))
 
 
+def _parse_flow(data: bytes, decimal: int) -> tuple[str, str, str]:
+    """解析流量/水量（0x03），按规范表35。
+    5B：BYTE5 D7~D6=符号(00B=正,11B=负), D5~D4=单位(00B=m³/s,11B=m³/h)。
+    0xAA 填充 = 缺测。
+    """
+    hex_str = bytes_to_hex_compact(data)
+    if all(b == 0xAA for b in data):
+        return ("-", hex_str, "m³/s")
+    byte5 = data[-1]
+    sign_bits = (byte5 >> 6) & 0x03
+    unit_bits = (byte5 >> 4) & 0x03
+    neg = sign_bits == 0x03
+    unit_map = {0x00: "m³/s", 0x03: "m³/h"}
+    unit_name = unit_map.get(unit_bits, f"m³/s(0x{unit_bits:02X})")
+    mod = bytearray(data[:4])
+    mod.append(byte5 & 0x0F)
+    v = bcd_bytes_to_int_le(bytes(mod))
+    d = 10 ** decimal
+    r = (-1 if neg else 1) * v / d
+    return (f"{r:.{decimal}f}", hex_str, unit_name)
+
+
 def _parse_comprehensive(data: bytes) -> list[ElementValue]:
     """解析综合参数（0x0E 功能码）。
-
-    bit0 为综合参数自身标识，bit1-bit7 对应 COMP_BITS 索引。
-    从 i=1 开始跳过 bit0（其值含义为"后续有数据"而非一个独立要素）。
+    按规范表45，D0~D7 依次为水质/土壤含水率/功率/气象/闸位/流量/水位/雨量。
     """
     if len(data) == 0:
         return []
@@ -143,7 +188,7 @@ def _parse_comprehensive(data: bytes) -> list[ElementValue]:
     remaining = list(data[1:])
     offset = 0
     items = []
-    for i in range(1, len(C.COMP_BITS)):
+    for i in range(len(C.COMP_BITS)):
         if bit_flag & (1 << i):
             func_code = C.COMP_BITS[i]
             chunk = bytes(remaining[offset:])
@@ -353,10 +398,7 @@ class SL427Decoder:
                 alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                 real_data = data_field[:-C.TP_LEN - 4]
                 if len(real_data) > 0:
-                    if func_code == 0x0E:
-                        elements.extend(_parse_comprehensive(real_data))
-                    else:
-                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                    elements.extend(_parse_ctrl_func_data(func_code, real_data))
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)
@@ -367,10 +409,24 @@ class SL427Decoder:
                 ))
 
         elif afn_hex == "b0":
-            if func_code == 0x0E:
-                elements.extend(_parse_comprehensive(data_field))
+            # 查询响应：data + alarm(2B) + state(2B)（规范7.3.22）
+            raw_len = len(data_field)
+            if raw_len >= 4:
+                state_bytes = data_field[-2:]
+                alarm_bytes = data_field[-4:-2]
+                real_data = data_field[:-4]
+                if len(real_data) > 0:
+                    if func_code == 0x0E:
+                        elements.extend(_parse_comprehensive(real_data))
+                    else:
+                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                elements.extend(_parse_alarm(alarm_bytes))
+                elements.extend(_parse_terminal(state_bytes))
             else:
-                elements.extend(_parse_ctrl_func_data(func_code, data_field))
+                if func_code == 0x0E:
+                    elements.extend(_parse_comprehensive(data_field))
+                else:
+                    elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
         elif afn_hex in ("61", "83"):
             special_info = {"type": "image", "bytes": data_field}
@@ -384,13 +440,16 @@ class SL427Decoder:
             if raw_len >= C.TP_LEN + 4:
                 tp_bytes = data_field[-C.TP_LEN:]
                 state_bytes = data_field[-C.TP_LEN - 2:-C.TP_LEN]
-                alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
-                real_data = data_field[:-C.TP_LEN - 4]
+                if afn_hex == "81":
+                    # 81H: alarm(2B) 在 data 之前（规范7.5.2）
+                    alarm_bytes = data_field[:2]
+                    real_data = data_field[2:-C.TP_LEN - 2]
+                else:
+                    # 82H: 同 C0，alarm(2B) 在 data 之后
+                    alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
+                    real_data = data_field[:-C.TP_LEN - 4]
                 if len(real_data) > 0:
-                    if func_code == 0x0E:
-                        elements.extend(_parse_comprehensive(real_data))
-                    else:
-                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                    elements.extend(_parse_ctrl_func_data(func_code, real_data))
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)
@@ -425,12 +484,12 @@ class SL427Decoder:
                     is_time=True, byte_len=C.TP_LEN,
                 ))
             else:
-                if data_field:
-                    volt_val = bcd_bytes_to_int_le(data_field) / 100
+                if len(data_field) >= 2:
+                    volt_val = bcd_bytes_to_int_le(data_field[:2]) / 100
                     elements.append(ElementValue(
                         name="电压", value=f"{volt_val:.2f}", unit="V",
-                        raw=bytes_to_hex_compact(data_field),
-                        byte_len=len(data_field), decimal=2,
+                        raw=bytes_to_hex_compact(data_field[:2]),
+                        byte_len=2, decimal=2,
                     ))
 
         elif afn_hex == "ff":
@@ -440,10 +499,27 @@ class SL427Decoder:
                 elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
         else:
-            elements.append(ElementValue(
-                name="未知功能码", value=f"AFN=0x{afn:02X}",
-                unit="", raw=bytes_to_hex_compact(data_field), editable=False,
-            ))
+            if 0x10 <= afn <= 0x4F and not is_downlink:
+                if len(data_field) == 1:
+                    cfm = data_field[0]
+                    cfm_map = {0x5A: "确认成功", 0x06: "ACK", 0x15: "NAK"}
+                    cfm_text = cfm_map.get(cfm, f"0x{cfm:02X}")
+                    elements.append(ElementValue(
+                        name=f"AFN=0x{afn:02X}确认响应",
+                        value=cfm_text, unit="",
+                        raw=bytes_to_hex_compact(data_field), editable=False,
+                    ))
+                else:
+                    elements.append(ElementValue(
+                        name=f"AFN=0x{afn:02X}响应",
+                        value=bytes_to_hex_compact(data_field), unit="",
+                        raw=bytes_to_hex_compact(data_field), editable=False,
+                    ))
+            else:
+                elements.append(ElementValue(
+                    name="未知功能码", value=f"AFN=0x{afn:02X}",
+                    unit="", raw=bytes_to_hex_compact(data_field), editable=False,
+                ))
 
         return elements, special_info
 

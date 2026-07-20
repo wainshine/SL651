@@ -1,7 +1,7 @@
 # SL651-Toolkit 需求规格说明书
 
-> 版本：v1.2.2  
-> 最后更新：2026-07-01  
+> 版本：v1.2.3  
+> 最后更新：2026-07-17  
 > 本文件为项目需求基线，后续开发、测试、审计均以此为出发点。
 
 ---
@@ -92,7 +92,7 @@ sl651-toolkit/
 | `33` | 加报报 | 上行 | ETX | ✅ | ✅ `build_alarm_frame` | 阈值触发或变化报警 |
 | `34` | 小时报 | 上行 | ETX | ✅ | ✅ `build_hourly_frame` | 每小时 12 组 5min 间隔水位 |
 | `35` | 人工置数报 | 上行 | ETX | ✅ | — | 人工录入数据 |
-| `37` | 查询实时数据 | 下行 | ENQ | — | ✅ `build_query_frame` | 查询要素 |
+| `37` | 查询实时数据 | 下行 | ENQ | — | ✅ `build_query_frame` | 查询所有实时数据（表42） |
 | `40` | 修改基本配置 | 下行 | ENQ | — | ✅ `build_set_param_frame` | 参数设置 |
 | `41` | 读取基本配置 | 下行 | ENQ | — | — | 查询响应 |
 | `48` | 恢复出厂设置 | 下行 | ENQ | — | ✅ `build_reset_frame` | 恢复出厂 |
@@ -126,7 +126,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 ### 2.5 解码器设计
 
-**输入**: 十六进制字符串或 bytes。自动识别 `7E7E`(HEX/BCD) 或 `0101`(ASCII) 起始。
+**输入**: 十六进制字符串或 bytes。自动识别 `7E7E`(HEX/BCD) 或 `01`(ASCII, 单 SOH) 起始。
 
 **错误处理**:
 - 报文为空 / 非HEX字符 / 奇数长度 / 非7E7E或0101开头 / 正文长度不匹配 → `DecodeError`
@@ -172,7 +172,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `02` | 链路检测 | 上行 | ✅ | ✅ `build_heartbeat` | F0=登录/F1=退出/F2=在线保持 |
 | `10` | 设置地址 (5B) | 下行 | — | ✅ `build_set_addr` | 参数设置 |
 | `11` | 设置时钟 (6B BCD) | 下行 | — | ✅ `build_set_clock` | 含星期月复合字节 |
-| `12` | 设置工作模式 (1B) | 下行 | — | ✅ `build_set_work_mode` | 0=自报/1=查询/2=兼容/3=调试 |
+| `12` | 设置工作模式 (1B) | 下行 | — | ✅ `build_set_work_mode` | 0=兼容/1=自报/2=查询/3=调试 |
 | `15` | 设置充值量 (4B BCD) | 下行 | — | ✅ `build_set_recharge` | m³ |
 | `30` | IC卡功能有效 | 下行 | — | ✅ `build_set_ic_card_on` | — |
 | `31` | 取消IC卡功能 | 下行 | — | ✅ `build_set_ic_card_off` | — |
@@ -292,7 +292,8 @@ python web/app.py
 | `test_decode_watertester` | SL651 | 水测家加报报解码 (含自定义要素) |
 | `test_encode_decode_roundtrip` | SL651 | 编码→解码往返一致性 |
 | `test_sl651_downlink_frames` | SL651 | 查询/设置/校时/复位 四类下行帧（验证结束符 ENQ） |
-| `test_sl651_ascii` | SL651 | ASCII 编码帧往返（SOH 起始） |
+| `test_sl651_ascii` | SL651 | 规范 ASCII 编码帧编解码（单 SOH + ASCII 字符头 + 4 字符 CRC） |
+| `test_sl651_ascii_roundtrip` | SL651 | ASCII 帧编解码往返（地址、密码、功能码、站类、要素值） |
 | `test_negative_bcd` | SL651 | 负数 BCD 0xFF前缀往返 |
 | `test_invalid_bcd_graceful` | SL651 | 无效 BCD 降级不崩溃 |
 | `test_crc8` | SL427 | CRC8 验证 |
@@ -307,8 +308,10 @@ python web/app.py
 | `test_fujian_messages` | SL651 | **23 条福建规定真实报文 CRC 验证** |
 | `test_beijing_messages` | SL651 | **25 条北京水务平台真实报文 CRC 验证**（8测站/3类报文） |
 | `test_simulator_engine_smoke` | 模拟器 | 引擎冒烟测试 |
+| `test_hourly_frame_validation` | SL651 | 小时报 12 组校验 |
+| `test_recharge_le_bcd` | SL427 | 充值量小端 BCD |
 
-**总计: 24 项**，全部通过。
+**总计: 25 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -355,10 +358,14 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 |------|------|
 | SL427 参数设置/查询（10H~4FH 通用模板 + 6 个便捷方法） | ✅ |
 | 模拟器加报机制（雨量站/水位站触发） | ✅ |
-| ASCII 编码帧支持（SOH 起始，解码+编码） | ✅ |
+| 规范 ASCII 编码帧（单 SOH + ASCII 字符头 + 4 字符 CRC，表16/17） | ✅ |
 | 福建规定 23 条真实报文验证 | ✅ |
 | 北京水务平台 25 条真实报文验证 | ✅ |
 | 北京水务 FF 子标识符（GPRS信号/机箱温度/地温/垂线流速等 7 个） | ✅ |
+| SL651 加报报触发要素标识 | ✅ |
+| SL651 下行帧正文结构修正（4A 校时/37 查询/48 98H标识） | ✅ |
+| SL651 流水号规则（下行=0、2F 不累加） | ✅ |
+| SL651 报文标识 12 位宽修正 | ✅ |
 
 ### ✅ P3 — 已完成
 
@@ -366,11 +373,20 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 |------|------|
 | SL651 下行帧编码（查询/设置/校时/复位，规约功能码+ENQ结束符） | ✅ |
 | Web UI（Flask 单文件解码界面） | ✅ |
+| 规范 ASCII 编码帧（单 SOH + ASCII 字符头 + 4 字符 CRC） | ✅ |
+| SL427 alarm/state 字节序修正（LE） | ✅ |
+| SL427 AFN=81H/84H/B0 数据域结构修正 | ✅ |
+| SL427 综合参数/流量/报警位/状态位解析修正 | ✅ |
+| SL427 PW 编码格式修正（表9） | ✅ |
+| 小时报 F4 雨量组 | ✅ |
+| 盲区测试全覆盖（10/10 通过） | ✅ |
 
 ### ⬜ 远期（P4）
 
 | 任务 | 说明 |
 |------|------|
-| 多包 (SYN/ETB) 拼接重组 | 当前可解码单帧多包，不支持拼接 |
+| 多包 (SYN/ETB) 拼接重组 | SYN 单帧偏移已处理，不支持跨帧拼接 |
 | 模拟器集成测试 | 端到端 MQTT broker 联调 |
 | SL427 参数设置全量 AFN | 当前通用模板 + 6 个便捷方法，剩余 ~20 个变长 AFN 未实现具体数据域 |
+| 45H 状态位 32 位全量 | 当前缩减为 12 位 |
+| SL427 ASCII 编码帧 | SL427 文本帧解码 |

@@ -8,6 +8,20 @@ from __future__ import annotations
 START_BYTE = 0x7E
 SOH = 0x01  # ASCⅡ 编码帧起始符
 
+# ===== ASCII 帧结构常量 (规格表16) =====
+# 新 ASCII 帧: 单 SOH 起始, 头部字段为 ASCII 十六进制字符串
+ASCII_CENTER_LEN = 2       # 中心站址 (1字节 → 2 ASCII 字符)
+ASCII_STATION_LEN = 10     # 遥测站地址 (5字节 → 10 ASCII 字符)
+ASCII_PASSWORD_LEN = 4     # 密码 (2字节 → 4 ASCII 字符)
+ASCII_FUNC_LEN = 2         # 功能码 (1字节 → 2 ASCII 字符)
+ASCII_IDENT_LEN = 4        # 报文标识 (2字节 → 4 ASCII 字符)
+ASCII_SERIAL_LEN = 4       # 流水号 (2字节 → 4 ASCII 字符)
+ASCII_TX_TIME_LEN = 12     # 发报时间 (6字节 BCD → 12 ASCII 字符)
+ASCII_CRC_LEN = 4          # CRC (2字节 → 4 ASCII 字符)
+ASCII_STX_OFFSET = 23      # STX 在 ASCII 帧中的字节偏移
+ASCII_BODY_OFFSET = 24     # 正文起始在 ASCII 帧中的字节偏移 (STX后)
+ASCII_DATA_OFFSET = 40     # 要素数据在 ASCII 帧中的字节偏移 (流水号4+发报时间12后)
+
 # ===== 帧结构偏移常量 =====
 # 帧头: 7E(2B) + center(1B) + station(5B) + pwd(2B) + func(1B) + ident(2B) = 13B + STX(1B)=14
 HEADER_LEN = 13   # 不含起止符的帧头长度
@@ -218,7 +232,7 @@ SL651_ELEMENTS: dict[str, tuple[str, str, str | None]] = {
     "56": ("铅", "mg/L", None),
     "57": ("叶绿素a", "mg/L", None),
     # ---- 80 ----
-    "80": ("4G信号强度", "dBm", "80"),
+    "80": ("4G信号强度", "dBm", "80"),  # 厂商自定义（附录C 76H~EFH 为保留）
 }
 
 # ===== ASCⅡ 编码标识符映射表 =====
