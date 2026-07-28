@@ -265,7 +265,7 @@ def decode():
 def main():
     print("SL651/SL427 报文解码器 Web UI")
     print("浏览器访问: http://localhost:5050")
-    app.run(host="0.0.0.0", port=5050, debug=True)  # 本地开发调试，生产部署请关闭 debug 并限制 host
+    app.run(host="127.0.0.1", port=5050, debug=False)
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ class SL651Encoder:
         function_code: int,
         body: bytes,
         direction: int = C.DIR_UPLINK,
-        ascii_mode: bool = False,
+        ascii_mode: bool = False,  # 已废弃（旧双 SOH 方言），请使用 build_ascii_frame
         end_marker: int | None = None,
         tx_time: datetime | None = None,
     ) -> bytes:
@@ -235,16 +235,16 @@ class SL651Encoder:
 
         if rain_amounts is not None:
             body.append(0xF4)
-            body.append(_make_def_byte(24, 1))
+            body.append(_make_def_byte(12, 0))
             for rn in rain_amounts:
                 if rn is None:
-                    body.extend(b'\xFF\xFF')
+                    body.append(0xFF)
                 else:
                     val = int(round(rn * 10))
-                    if val < 0:
-                        body.extend(b'\xFF\xFF')
+                    if val < 0 or val > 255:
+                        body.append(0xFF)
                     else:
-                        body.extend(val.to_bytes(2, 'big'))
+                        body.append(val)
 
         body.append(0xF5)
         body.append(_make_def_byte(24, 2))
@@ -380,7 +380,7 @@ class SL651Encoder:
         body_stx_etx = serial_hex + tx_time_hex + body_ascii
 
         body_len = C.ASCII_SERIAL_LEN + C.ASCII_TX_TIME_LEN + len(body_ascii)
-        ident_hi = (C.DIR_UPLINK << 7) | ((body_len >> 8) & 0x7F)
+        ident_hi = (C.DIR_UPLINK << 7) | ((body_len >> 8) & 0x0F)
         ident_lo = body_len & 0xFF
 
         frame = bytearray()

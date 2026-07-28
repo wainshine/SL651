@@ -265,12 +265,18 @@ class SL651Decoder:
         if total < C.ASCII_DATA_OFFSET + 3:
             raise DecodeError(f"ASCII 报文太短: {total} 字节")
 
-        center = int(frame[1:3].decode("ascii"), 16)
-        station_addr = frame[3:13].decode("ascii")
-        station_raw = bytes.fromhex(station_addr)
-        password = int(frame[13:17].decode("ascii"), 16)
-        func = int(frame[17:19].decode("ascii"), 16)
-        ident_raw = int(frame[19:23].decode("ascii"), 16)
+        try:
+            center = int(frame[1:3].decode("ascii"), 16)
+            station_addr = frame[3:13].decode("ascii")
+            station_raw = bytes.fromhex(station_addr)
+            password = int(frame[13:17].decode("ascii"), 16)
+            func = int(frame[17:19].decode("ascii"), 16)
+            ident_raw = int(frame[19:23].decode("ascii"), 16)
+            serial_raw = int(frame[24:28].decode("ascii"), 16)
+            tx_time_bytes = bytes.fromhex(frame[28:40].decode("ascii"))
+            crc_raw = frame[-4:].decode("ascii")
+        except (ValueError, UnicodeDecodeError) as e:
+            raise DecodeError(f"ASCII 报文头部解析失败: {e}") from e
         ident_hi = (ident_raw >> 8) & 0xFF
         ident_lo = ident_raw & 0xFF
         direction = (ident_hi >> 7) & 1
@@ -280,10 +286,7 @@ class SL651Decoder:
         if stx != C.STX:
             raise DecodeError(f"ASCII 报文 STX 应为 02H，实际 {stx:02X}H")
 
-        serial_raw = int(frame[24:28].decode("ascii"), 16)
         serial_hex_str = f"{serial_raw:04X}"
-
-        tx_time_bytes = bytes.fromhex(frame[28:40].decode("ascii"))
         tx_hex_str = bytes_to_hex_compact(tx_time_bytes)
 
         etx_pos = C.ASCII_BODY_OFFSET + body_len
@@ -315,10 +318,10 @@ class SL651Decoder:
         elements = self._parse_ascii_elements(data_bytes)
         if elements:
             obs_hex, obs_display, stn_type_hex, stn_type_name = \
-                self._extract_ascii_times(data_bytes, station_raw)
+                self._extract_ascii_times(data_bytes)
 
-        byte_map = _build_byte_map(bytes_list, direction, etx_pos) if False else ""
-        byte_table = _build_byte_table(bytes_list, direction, etx_pos) if False else []
+        byte_map = ""
+        byte_table = []
 
         return DecodedMessage(
             hex_input=bytes_to_hex_compact(frame),
@@ -571,30 +574,47 @@ class SL651Decoder:
             if code.upper() in ("F1F1", "F0F0", "ST", "TT"):
                 i += 1
                 continue
-            
+
+            # 收集多值数组：检查后续 token 是否为纯数值
+            values = [value_str]
+            j = i + 2
+            while j < len(tokens):
+                nxt = tokens[j]
+                nxt_entry = C.SL651_ASCII_ELEMENTS.get(nxt.upper())
+                if nxt_entry or nxt.upper() in ("F1F1", "F0F0", "ST", "TT"):
+                    break
+                try:
+                    float(nxt)
+                except ValueError:
+                    break
+                values.append(nxt)
+                j += 1
+
             desc = entry[0] if entry else f"未知({code})"
             unit = entry[1] if entry else ""
 
-            try:
-                if "." in value_str or value_str.startswith("-"):
-                    val = float(value_str)
-                    decimals = len(value_str.split(".")[1]) if "." in value_str else 0
-                else:
-                    val = int(value_str)
+            for vi, vs in enumerate(values):
+                try:
+                    if "." in vs or vs.startswith("-"):
+                        val = float(vs)
+                        decimals = len(vs.split(".")[1]) if "." in vs else 0
+                    else:
+                        val = int(vs)
+                        decimals = 0
+                except ValueError:
+                    val = vs
                     decimals = 0
-            except ValueError:
-                val = value_str
-                decimals = 0
 
-            elements.append(ElementValue(
-                code=code.upper(), name=desc, value=val, unit=unit,
-                raw=value_str, data_type="ASCII", decimal=decimals,
-            ))
-            i += 2
+                label = desc if vi == 0 else f"{desc}[{vi}]"
+                elements.append(ElementValue(
+                    code=code.upper(), name=label, value=val, unit=unit,
+                    raw=vs, data_type="ASCII", decimal=decimals,
+                ))
+            i = j
         return elements
 
     def _extract_ascii_times(
-        self, data: bytes, station_raw: bytes
+        self, data: bytes
     ) -> tuple[str, str, str, str]:
         ascii_text = data.decode("ascii", errors="replace").strip()
         tokens = ascii_text.split()

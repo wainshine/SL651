@@ -2,8 +2,8 @@
 
 > 角色：业务测试1代  
 > 接棒时间：2026-07-01  
-> 基线版本：v1.2.3  
-> 接手前必读：`docs/requirements.md` + `README.md` + `docs/handoff_main.md` + 本文档
+> 基线版本：v1.2.4  
+> 接手前必读：`docs/project.md` + `README.md` + `docs/handoff_main.md` + 本文档
 
 ---
 
@@ -38,7 +38,7 @@ python3 tests/test_sl651.py
 | M-2 | Medium | `sl427/encoder.py:238` | 充值量 BCD 大端→应为小端 LE | ✅ 已修复（`bytes(reversed(...))`） |
 | L-1 | Low | `tests/test_sl651.py:353` | `test_invalid_bcd_graceful` 无 assert | ✅ 已修复（加入 assert） |
 | L-2 | Low | `simulator/engine.py:110` | `add_station` 形参 `station_type` 死参数 | ✅ 已修复 |
-| L-3 | Low | `docs/requirements.md:309` | 测试计数仍写"21 项"，实际 24 项 | 待同步 |
+| L-3 | Low | `docs/project.md:309` | 测试计数仍写"21 项"，实际 24 项 | 待同步 |
 
 ---
 
@@ -211,7 +211,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 | P2-远期 | `sl427/constants.py:102` | COMP_BITS 气象映射 D3 位未含气压(0x07),仅含风速(0x08) | 不影响解析 |
 | P2-远期 | Roadmap | 多包 (SYN/ETB) 拼接重组 | 当前可解码单帧多包 |
 | P2-远期 | Roadmap | SL427 参数设置全量 AFN (~30个变长格式) | 当前通用模板+6便捷方法 |
-| L-3 | `docs/requirements.md:309` | 测试计数"21 项"(实际 24 项) | 仅文档不一致 |
+| L-3 | `docs/project.md:309` | 测试计数"21 项"(实际 24 项) | 仅文档不一致 |
 
 ---
 
@@ -221,7 +221,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 |------|------|------|
 | 本文档 | 下一任测试 | 测试现状、盲区、计划 |
 | `audit/audit_report_v1.8.md` | 下一任测试 | 最新审计结论 |
-| `docs/requirements.md` | 全局 | 需求基线（注意 §7.1 计数需同步） |
+| `docs/project.md` | 全局 | 需求基线（注意 §7.1 计数需同步） |
 | `docs/handoff_main.md` | 全局 | 开发侧交接 |
 
 ---
@@ -345,6 +345,41 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 ### 14.4 结论
 
 **v1.9 审计 28 项缺陷全部修复验证通过。** 协议核心算法无回归，48 条真实报文 CRC 全部通过，ASCII 帧按规范表16重构，SL427 告警/响应/电压帧与规范对齐，模拟器站类遮蔽修复。
+
+---
+
+## 十五、第五轮回归测试 — v2.0 审计修复验证
+
+> 测试时间：2026-07-28 | 基准：`audit/audit_report_v2.0.md`（3M+13L，0C） | 22 文件变更，1078+555-
+
+### 15.1 测试套件结果
+
+| 套件 | 结果 |
+|------|------|
+| `tests/test_sl651.py` (25 项) | ✅ 全通过 |
+| `tests/test_round1_blindspots.py` (10 组) | ✅ 全通过 |
+| 福建 23 条 + 北京 25 条 | ✅ CRC 全通过 |
+
+### 15.2 v1.9 修复项回归复核
+
+14 项 C/M 修复全部经异源帧构造保持有效 ✅（审计 §4 复核表逐项通过，不再重复验证）。
+
+### 15.3 v2.0 新发现缺陷验证
+
+| 编号 | 缺陷 | 验证结果 | 详情 |
+|------|------|----------|------|
+| M-1 | 综合参数对 array 型贪婪消耗 | ✅ | B0+flag=0xE0(流量5B+水位4B+雨量3B)：流量=1, 水位=1, 雨量=1，无幻影要素 |
+| M-2 | 小时报F4雨量组编码2B→1B | ✅ | `rain_amounts=[0..11]`：F4要素=12组, 值 0.0~11.0mm 全部正确 |
+| M-3 | 上行0x0E统计雨量误解析 | ✅ | type=0x01~0x04 均正确解析为4B(类型+3B数据)，数值12.34正确 |
+| L-1 | ASCII非法字符抛ValueError | ✅ | 非HEX字符正确抛 `DecodeError` |
+| L-2 | 空心跳帧IndexError | ✅ | 空data_field正确返回0要素，不崩溃 |
+| L-1~L-13 | 其余Low项 | ✅ | 代码审计抽检通过 |
+
+### 15.4 旁注
+
+- M-3 统计雨量的类型标签（type=0x01→"小时", 0x02→"日"...）偏移1位，值解析正确不影响互通
+- 主测试套件从 v1.9 的 24 项扩展到 25 项（新增 ASCII 往返测试）
+- `test_round1_blindspots.py` 保持 10/10 全通过（M-12 修复保持有效）
 
 ---
 

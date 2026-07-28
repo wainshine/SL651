@@ -37,7 +37,7 @@ class Sender(ABC):
 class MqttxSender(Sender):
     """通过 mqttx CLI 发送 MQTT 消息。
 
-    使用前需安装: npm install -g mqttx
+    使用前需安装 mqttx CLI（独立二进制，参考 README 环境要求）
     """
 
     def __init__(
@@ -82,7 +82,7 @@ class MqttxSender(Sender):
             return True
         except FileNotFoundError:
             raise SendError(
-                "未找到 mqttx 命令。请安装: npm install -g mqttx\n"
+                "未找到 mqttx 命令。请参考 README 环境要求安装 mqttx CLI\n"
                 "或下载: https://mqttx.app/downloads"
             )
         except subprocess.TimeoutExpired:

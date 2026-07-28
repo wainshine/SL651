@@ -34,7 +34,7 @@ python tests/test_sl651.py
 
 ## 详细文档
 
-- **需求规格**：`sl651-toolkit/docs/requirements.md`
+- **项目规格**：`sl651-toolkit/docs/project.md`
 - **交接文档**：`sl651-toolkit/docs/handoff_main.md`
 - **工具包 README**：`sl651-toolkit/README.md`
 - **各模块 README**：`sl651/README.md`、`sl427/README.md`、`simulator/README.md`、`tools/README.md`、`web/README.md`

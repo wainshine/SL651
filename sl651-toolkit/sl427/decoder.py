@@ -75,8 +75,8 @@ class DecodedMessage:
         }
 
 
-def _parse_ctrl_func_data(func_code: int, data_bytes: bytes) -> list[ElementValue]:
-    """解析控制功能码对应的数据。"""
+def _parse_ctrl_func_data(func_code: int, data_bytes: bytes, max_items: int | None = None) -> list[ElementValue]:
+    """解析控制功能码对应的数据。max_items 限制解析条数（综合参数用，每型仅一次）。"""
     definition = C.CTRL_FUNC_MAP.get(func_code)
     if not definition or definition["byteLen"] == 0:
         return []
@@ -86,6 +86,8 @@ def _parse_ctrl_func_data(func_code: int, data_bytes: bytes) -> list[ElementValu
     remaining = list(data_bytes)
 
     while pos < len(remaining):
+        if max_items is not None and len(items) >= max_items:
+            break
         item_len = definition["byteLen"]
         if pos + item_len > len(remaining):
             break
@@ -192,10 +194,34 @@ def _parse_comprehensive(data: bytes) -> list[ElementValue]:
         if bit_flag & (1 << i):
             func_code = C.COMP_BITS[i]
             chunk = bytes(remaining[offset:])
-            sub_items = _parse_ctrl_func_data(func_code, chunk)
+            sub_items = _parse_ctrl_func_data(func_code, chunk, max_items=1)
             items.extend(sub_items)
             consumed = sum(e.byte_len for e in sub_items)
             offset += consumed
+    return items
+
+
+def _parse_statistical_rainfall(data: bytes) -> list[ElementValue]:
+    """解析上行统计雨量（0x0E），规范7.5.6 c：1B 雨量类型 + 3B 雨量数据（小端 BCD）。"""
+    items = []
+    pos = 0
+    rain_type_map = {0x00: "本次", 0x01: "小时", 0x02: "日", 0x03: "月", 0x04: "年"}
+    while pos + 4 <= len(data):
+        rtype = data[pos]
+        rdata = data[pos + 1: pos + 4]
+        pos += 4
+        try:
+            v = bcd_bytes_to_int_le(rdata)
+            val = f"{v / 100:.2f}"
+        except (ValueError, IndexError):
+            val = "-"
+        rtype_name = rain_type_map.get(rtype, f"类型0x{rtype:02X}")
+        items.append(ElementValue(
+            name=f"统计雨量({rtype_name})",
+            value=val, unit="mm",
+            raw=bytes_to_hex_compact(bytes([rtype]) + rdata),
+            byte_len=4, decimal=2,
+        ))
     return items
 
 
@@ -381,13 +407,16 @@ class SL427Decoder:
         func_code = ctrl["func_code"]
 
         if afn_hex == "02":
-            hc = data_field[0]
-            hn = C.HEART_MAP.get(hc, f"未知(0x{hc:02X})")
-            special_info = {"type": "heart", "code": hc, "name": hn}
-            elements.append(ElementValue(
-                name="心跳类型", value=hn,
-                unit="", raw=f"{hc:02X}", editable=False,
-            ))
+            if len(data_field) == 0:
+                special_info = {"type": "heart", "code": 0, "name": "空数据"}
+            else:
+                hc = data_field[0]
+                hn = C.HEART_MAP.get(hc, f"未知(0x{hc:02X})")
+                special_info = {"type": "heart", "code": hc, "name": hn}
+                elements.append(ElementValue(
+                    name="心跳类型", value=hn,
+                    unit="", raw=f"{hc:02X}", editable=False,
+                ))
 
         elif afn_hex == "c0":
             # 自报实时数据: D + alarm(2B) + state(2B) + Tp(7B)
@@ -398,7 +427,10 @@ class SL427Decoder:
                 alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                 real_data = data_field[:-C.TP_LEN - 4]
                 if len(real_data) > 0:
-                    elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                    if func_code == 0x0E:
+                        elements.extend(_parse_statistical_rainfall(real_data))
+                    else:
+                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)
@@ -449,7 +481,10 @@ class SL427Decoder:
                     alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                     real_data = data_field[:-C.TP_LEN - 4]
                 if len(real_data) > 0:
-                    elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                    if func_code == 0x0E:
+                        elements.extend(_parse_statistical_rainfall(real_data))
+                    else:
+                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)

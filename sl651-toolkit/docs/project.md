@@ -1,8 +1,8 @@
-# SL651-Toolkit 需求规格说明书
+# SL651-Toolkit 项目规格说明书
 
-> 版本：v1.2.3  
+> 版本：v1.2.4  
 > 最后更新：2026-07-17  
-> 本文件为项目需求基线，后续开发、测试、审计均以此为出发点。
+> 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
 ---
 
@@ -145,7 +145,8 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_hourly_frame(levels, inst, v)` | 0x34 | 上行 | ETX | ✅ 小时报（12×F5数组） |
 | `build_link_maintain_frame()` | 0x2F | 上行 | ETX | ✅ 链路维持 |
 | `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ✅ ASCII 编码（SOH起始） |
-| `build_query_frame(guides)` | 0x37 | 下行 | ENQ | ✅ 查询要素 |
+| `build_query_frame()` | 0x37 | 下行 | ENQ | ✅ 查询实时数据（空正文，表42） |
+| `build_query_body(guides)` | 3AH | 下行 | ENQ | ✅ 查询指定要素（正文含引导符） |
 | `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | ✅ 参数设置 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | ✅ 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | ✅ 恢复出厂 |

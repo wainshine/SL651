@@ -78,8 +78,11 @@ class StationRunner:
                         triggered = self.station.check_alert_trigger(self.alert_threshold)
 
                     if triggered:
-                        alert_frame = self.encoder.build_timing_frame(
-                            elements, obs_time=now, function_code=0x33,
+                        trigger = None
+                        if hasattr(self.station, 'get_alert_trigger'):
+                            trigger = self.station.get_alert_trigger()
+                        alert_frame = self.encoder.build_alarm_frame(
+                            elements, obs_time=now, trigger=trigger,
                         )
                         alert_hex = alert_frame.hex().upper()
                         ok_alert = self.sender.send(alert_hex, self.station.station_addr)

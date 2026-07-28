@@ -160,6 +160,8 @@ def encode_pw(key1: int, key2: int) -> bytes:
     key1: 1 位 BCD(0~9), 密钥1, 放在 PW 第1字节高半字节
     key2: 3 位 BCD(0~999), 密钥2, 放在 PW 第1字节低半字节 + 第2字节
     """
+    if key2 > 999:
+        raise ValueError(f"PW key2 超出范围: {key2} (0~999)")
     from sl651.bcd import int_to_bcd
     byte1 = ((key1 & 0x0F) << 4) | ((key2 // 100) & 0x0F)
     byte2 = int_to_bcd(key2 % 100)

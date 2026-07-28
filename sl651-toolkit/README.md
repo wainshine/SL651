@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.3
+# SL651 水文规约工具包 v1.2.4
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -47,7 +47,7 @@ sl651-toolkit/
 ├── tests/
 │   └── test_sl651.py           # 24 项自测
 ├── docs/
-│   └── requirements.md         # 需求规格说明书
+│   └── project.md              # 项目规格说明书
 ├── audit/                      # 审计报告 v1.1~v1.8
 ├── requirements.txt            # PyYAML>=6.0 + flask
 └── README.md
@@ -214,12 +214,14 @@ python web/app.py
 ```bash
 python tests/test_sl651.py
 
-# 24 项测试全部通过（含 23 条福建 + 25 条北京真实报文 CRC 验证）
+# 25 项测试全部通过（含 23 条福建 + 25 条北京真实报文 CRC 验证）
 ```
 
 ---
 
 ## 五、版本历史
+
+- **v1.2.4**：审计 v2.0 修复版（3M+13L 缺陷修复）
 
 - **v1.2.3**：审计 v1.9 修复版（28 项缺陷修复）
   - C-1: SL651 ASCII 帧按规范表16/17 重构（单 SOH + ASCII 字符头 + 4 字符 CRC + ST/TT 标识符）

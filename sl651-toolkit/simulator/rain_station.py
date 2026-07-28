@@ -30,3 +30,6 @@ class RainStation(BaseStation):
             (0x26, daily, 3, 1),     # 累计雨量（TODO: 应为不归零累计值，当前用日累计近似）
             (0x38, self.voltage_gen.next(), 2, 2),
         ]
+
+    def get_alert_trigger(self) -> tuple[int, float, int, int]:
+        return (0x20, self.rain_gen.daily_accum, 3, 1)
