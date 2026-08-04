@@ -29,24 +29,25 @@ HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SL651 / SL427 报文解码台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 46 46'%3E%3Crect width='46' height='46' rx='6' fill='%230d9488'/%3E%3Cpath d='M7 20 Q13 13 19 20 T31 20 T43 20' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M7 29 Q13 22 19 29 T31 29 T43 29' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' opacity='.6'/%3E%3C/svg%3E">
 <style>
   :root {
-    --bg: #0a0e13;
-    --bg-panel: #10161d;
-    --bg-inset: #0c1219;
-    --line: #1e2a35;
-    --line-soft: #162028;
-    --text: #d7e2ea;
-    --text-dim: #7a8fa0;
-    --text-faint: #4a5c6b;
-    --accent: #2dd4bf;
-    --accent-dim: #134e4a;
-    --cyan: #38bdf8;
-    --ok: #34d399;
-    --ok-bg: rgba(52, 211, 153, .1);
-    --bad: #f87171;
-    --bad-bg: rgba(248, 113, 113, .1);
-    --warn: #fbbf24;
+    --bg: #f2f5f4;
+    --bg-panel: #ffffff;
+    --bg-inset: #f7faf9;
+    --line: #dbe4e2;
+    --line-soft: #e8efed;
+    --text: #1d2b33;
+    --text-dim: #54696f;
+    --text-faint: #8aa0a8;
+    --accent: #0d9488;
+    --accent-dim: #ccfbf1;
+    --cyan: #0e7490;
+    --ok: #059669;
+    --ok-bg: #ecfdf5;
+    --bad: #dc2626;
+    --bad-bg: #fef2f2;
+    --warn: #d97706;
     --serif: "Songti SC", "STSong", "Noto Serif SC", "SimSun", serif;
     --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --mono: "SF Mono", "Menlo", "Consolas", "Courier New", monospace;
@@ -59,9 +60,9 @@ HTML = r"""<!DOCTYPE html>
     color: var(--text);
     min-height: 100vh;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(45, 212, 191, .06), transparent),
-      linear-gradient(rgba(30, 42, 53, .35) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(30, 42, 53, .35) 1px, transparent 1px);
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(13, 148, 136, .07), transparent),
+      linear-gradient(rgba(13, 148, 136, .05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(13, 148, 136, .05) 1px, transparent 1px);
     background-size: 100% 100%, 32px 32px, 32px 32px;
   }
 
@@ -73,53 +74,60 @@ HTML = r"""<!DOCTYPE html>
   .brand { display: flex; align-items: center; gap: 16px; }
   .brand-mark { width: 46px; height: 46px; flex: none; }
   .brand h1 { font-family: var(--serif); font-size: 26px; font-weight: 700;
-              letter-spacing: .14em; color: #eef6f9; }
+              letter-spacing: .14em; color: #14231f; }
   .brand .sub { margin-top: 5px; font-size: 11.5px; letter-spacing: .28em;
                 color: var(--text-faint); text-transform: uppercase; }
-  .meta-badges { display: flex; gap: 8px; }
-  .badge { font-family: var(--mono); font-size: 11px; padding: 4px 10px;
-           border: 1px solid var(--line); border-radius: 3px; color: var(--text-dim);
-           background: var(--bg-panel); letter-spacing: .06em; }
-  .badge b { color: var(--accent); font-weight: 600; }
+  .meta-note { font-family: var(--mono); font-size: 11.5px; color: var(--text-faint);
+               letter-spacing: .1em; padding-bottom: 4px; }
+  .meta-note b { color: var(--accent); font-weight: 600; }
 
   /* ---------- 面板 ---------- */
   .panel { background: var(--bg-panel); border: 1px solid var(--line);
-           border-radius: 6px; position: relative; }
+           border-radius: 6px; position: relative;
+           box-shadow: 0 1px 3px rgba(29, 43, 51, .06), 0 4px 16px rgba(29, 43, 51, .04); }
   .panel::before { content: ""; position: absolute; top: 0; left: 12px; right: 12px;
                    height: 1px; background: linear-gradient(90deg, transparent,
-                   rgba(45, 212, 191, .35), transparent); }
+                   rgba(13, 148, 136, .45), transparent); }
   .panel-head { display: flex; align-items: center; gap: 10px;
                 padding: 13px 20px; border-bottom: 1px solid var(--line-soft); }
   .panel-head .dot { width: 7px; height: 7px; border-radius: 50%;
-                     background: var(--accent); box-shadow: 0 0 8px rgba(45,212,191,.7); }
+                     background: var(--accent); box-shadow: 0 0 6px rgba(13, 148, 136, .5); }
   .panel-head h2 { font-size: 12px; font-weight: 600; letter-spacing: .3em;
                    color: var(--text-dim); text-transform: uppercase; }
   .panel-body { padding: 20px; }
 
   /* ---------- 输入区 ---------- */
   .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px;
-         overflow: hidden; }
+         overflow: hidden; background: var(--bg-panel); }
   .seg button { font-family: var(--mono); font-size: 12px; padding: 7px 18px;
                 background: transparent; color: var(--text-dim); border: none;
                 cursor: pointer; letter-spacing: .08em; transition: all .18s; }
   .seg button + button { border-left: 1px solid var(--line); }
-  .seg button.on { background: var(--accent-dim); color: var(--accent); }
-  .seg button:hover:not(.on) { color: var(--text); }
+  .seg button.on { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+  .seg button:hover:not(.on) { color: var(--text); background: var(--bg-inset); }
 
   .input-row { display: flex; align-items: center; justify-content: space-between;
                gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-  .samples { display: flex; gap: 8px; align-items: center; }
+  .samples { display: flex; gap: 16px; align-items: center; }
   .samples .lbl { font-size: 11px; color: var(--text-faint); letter-spacing: .15em; }
 
+  .sample-link { font-size: 12.5px; background: none; border: none; padding: 2px 0;
+                 color: var(--accent); cursor: pointer; font-family: var(--sans);
+                 letter-spacing: .03em; transition: color .15s; }
+  .sample-link::before { content: "› "; font-weight: 600; }
+  .sample-link:hover { color: #0f766e; text-decoration: underline;
+                       text-underline-offset: 3px; }
+
   .ghost-btn { font-size: 12px; padding: 6px 14px; border-radius: 4px;
-               border: 1px solid var(--line); background: transparent;
+               border: 1px solid var(--line); background: var(--bg-panel);
                color: var(--text-dim); cursor: pointer; transition: all .18s;
                font-family: var(--sans); letter-spacing: .05em; }
   .ghost-btn:hover { border-color: var(--accent); color: var(--accent); }
 
   .hex-wrap { position: relative; border: 1px solid var(--line); border-radius: 4px;
-              background: var(--bg-inset); transition: border-color .2s; }
-  .hex-wrap:focus-within { border-color: rgba(45, 212, 191, .5); }
+              background: var(--bg-inset); transition: border-color .2s, box-shadow .2s; }
+  .hex-wrap:focus-within { border-color: var(--accent);
+                           box-shadow: 0 0 0 3px rgba(13, 148, 136, .12); }
   textarea { width: 100%; height: 150px; background: transparent; border: none;
              outline: none; resize: vertical; padding: 14px 16px;
              font-family: var(--mono); font-size: 13px; line-height: 1.9;
@@ -132,10 +140,11 @@ HTML = r"""<!DOCTYPE html>
   .action-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
   .run-btn { position: relative; font-size: 13px; font-weight: 600; letter-spacing: .2em;
              padding: 10px 34px; border: 1px solid var(--accent); border-radius: 4px;
-             background: rgba(45, 212, 191, .12); color: var(--accent);
+             background: var(--accent); color: #ffffff;
              cursor: pointer; transition: all .2s; overflow: hidden; }
-  .run-btn:hover { background: rgba(45, 212, 191, .22); box-shadow: 0 0 18px rgba(45, 212, 191, .25); }
-  .run-btn:disabled { opacity: .5; cursor: wait; }
+  .run-btn:hover { background: #0f766e; border-color: #0f766e;
+                   box-shadow: 0 4px 14px rgba(13, 148, 136, .35); }
+  .run-btn:disabled { opacity: .55; cursor: wait; }
   .hint { font-size: 11px; color: var(--text-faint); margin-left: auto;
           font-family: var(--mono); letter-spacing: .04em; }
   kbd { font-family: var(--mono); font-size: 10px; border: 1px solid var(--line);
@@ -143,7 +152,7 @@ HTML = r"""<!DOCTYPE html>
         color: var(--text-dim); background: var(--bg-panel); }
 
   /* ---------- 错误 ---------- */
-  .err { display: none; margin-top: 16px; border: 1px solid rgba(248, 113, 113, .4);
+  .err { display: none; margin-top: 16px; border: 1px solid #fca5a5;
          background: var(--bad-bg); border-radius: 4px; padding: 12px 16px;
          font-size: 13px; color: var(--bad); font-family: var(--mono); }
   .err.show { display: block; animation: rise .3s ease both; }
@@ -165,9 +174,12 @@ HTML = r"""<!DOCTYPE html>
   .crc-pill { margin-left: auto; font-size: 11.5px; font-weight: 600;
               letter-spacing: .12em; padding: 4px 14px; border-radius: 20px; }
   .crc-pill.ok { color: var(--ok); background: var(--ok-bg);
-                 border: 1px solid rgba(52, 211, 153, .35); }
+                 border: 1px solid #a7f3d0; }
   .crc-pill.bad { color: var(--bad); background: var(--bad-bg);
-                  border: 1px solid rgba(248, 113, 113, .35); }
+                  border: 1px solid #fca5a5; }
+  .el-count { margin-left: auto; font-size: 11.5px; color: var(--text-faint);
+              letter-spacing: .08em; font-family: var(--mono); }
+  .el-count b { color: var(--text-dim); font-weight: 600; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   thead th { font-size: 11px; font-weight: 600; letter-spacing: .22em;
@@ -175,9 +187,9 @@ HTML = r"""<!DOCTYPE html>
              border-bottom: 1px solid var(--line); text-transform: uppercase; }
   tbody td { padding: 9px 16px; border-bottom: 1px solid var(--line-soft); }
   tbody tr { transition: background .15s; }
-  tbody tr:hover { background: rgba(45, 212, 191, .04); }
-  td.code { font-family: var(--mono); color: var(--accent); }
-  td.val { font-family: var(--mono); color: #eef6f9; font-weight: 500; }
+  tbody tr:hover { background: #f0fdfa; }
+  td.code { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+  td.val { font-family: var(--mono); color: #14231f; font-weight: 500; }
   td.raw { font-family: var(--mono); font-size: 12px; color: var(--text-dim);
            letter-spacing: .05em; }
   .empty { padding: 22px 16px; text-align: center; color: var(--text-faint);
@@ -211,21 +223,17 @@ HTML = r"""<!DOCTYPE html>
   <header>
     <div class="brand">
       <svg class="brand-mark" viewBox="0 0 46 46" fill="none" aria-hidden="true">
-        <rect x="1" y="1" width="44" height="44" rx="6" stroke="#1e2a35" stroke-width="1.5"/>
-        <path d="M7 20 Q13 13 19 20 T31 20 T43 20" stroke="#2dd4bf" stroke-width="2" fill="none" stroke-linecap="round"/>
-        <path d="M7 28 Q13 21 19 28 T31 28 T43 28" stroke="#38bdf8" stroke-width="1.5" fill="none" stroke-linecap="round" opacity=".55"/>
-        <path d="M7 35 Q13 30 19 35 T31 35 T43 35" stroke="#2dd4bf" stroke-width="1" fill="none" stroke-linecap="round" opacity=".3"/>
+        <rect x="1" y="1" width="44" height="44" rx="6" stroke="#c3d4d0" stroke-width="1.5"/>
+        <path d="M7 20 Q13 13 19 20 T31 20 T43 20" stroke="#0d9488" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <path d="M7 28 Q13 21 19 28 T31 28 T43 28" stroke="#0e7490" stroke-width="1.5" fill="none" stroke-linecap="round" opacity=".55"/>
+        <path d="M7 35 Q13 30 19 35 T31 35 T43 35" stroke="#0d9488" stroke-width="1" fill="none" stroke-linecap="round" opacity=".3"/>
       </svg>
       <div>
         <h1>报文解码台</h1>
         <div class="sub">HYDROLOGIC TELEMETRY FRAME DECODER</div>
       </div>
     </div>
-    <div class="meta-badges">
-      <span class="badge"><b>SL651</b>-2014</span>
-      <span class="badge"><b>SL/T 427</b>-2021</span>
-      <span class="badge">v1.2.4</span>
-    </div>
+    <div class="meta-note"><b>SL651</b>-2014&nbsp;·&nbsp;<b>SL/T 427</b>-2021&nbsp;·&nbsp;__VERSION__</div>
   </header>
 
   <div class="panel">
@@ -239,9 +247,9 @@ HTML = r"""<!DOCTYPE html>
     <div class="panel-body">
       <div class="input-row">
         <div class="samples">
-          <span class="lbl">示例</span>
-          <button class="ghost-btn" type="button" onclick="loadSample('sl651')">SL651 定时报</button>
-          <button class="ghost-btn" type="button" onclick="loadSample('sl427')">SL427 自报帧</button>
+          <span class="lbl">载入示例</span>
+          <button class="sample-link" type="button" onclick="loadSample('sl651')">SL651 定时报</button>
+          <button class="sample-link" type="button" onclick="loadSample('sl427')">SL427 自报帧</button>
         </div>
         <button class="ghost-btn" type="button" onclick="clearAll()">清空</button>
       </div>
@@ -270,7 +278,7 @@ HTML = r"""<!DOCTYPE html>
       <div class="panel">
         <div class="panel-head">
           <span class="dot"></span><h2>要素列表</h2>
-          <span class="badge" id="elCount" style="margin-left:auto"></span>
+          <span class="el-count" id="elCount"></span>
         </div>
         <div id="elTable"></div>
       </div>
@@ -357,7 +365,7 @@ function renderResult(data) {
   document.getElementById("frameInfo").innerHTML = infoHtml;
 
   var els = data.elements || [];
-  document.getElementById("elCount").innerHTML = "<b>" + els.length + "</b> 项";
+  document.getElementById("elCount").innerHTML = "共 <b>" + els.length + "</b> 项";
   var box = document.getElementById("elTable");
   if (!els.length) {
     box.innerHTML = '<div class="empty">— 无要素数据 —</div>';
@@ -418,10 +426,13 @@ updateCount();
 </body>
 </html"""
 
+from sl651 import __version__ as TOOLKIT_VERSION
+
 HTML = (
     HTML
     .replace("__SL651__", json.dumps(SL651_SAMPLE))
     .replace("__SL427__", json.dumps(SL427_SAMPLE))
+    .replace("__VERSION__", f"v{TOOLKIT_VERSION}")
 )
 
 
