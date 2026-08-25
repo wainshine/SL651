@@ -38,4 +38,4 @@ python web/app.py
 
 - `sl651/` — SL651Decoder
 - `sl427/` — SL427Decoder
-- `flask` — 需要单独安装：`pip install flask`
+- `flask` — 已含于 `requirements.txt`

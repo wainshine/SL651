@@ -98,6 +98,18 @@ def format_sl427(result) -> str:
     return "\n".join(lines)
 
 
+def _sanitize_dict(d: dict) -> dict:
+    """JSON 输出脱敏：与 text 输出一致 —— 密码不显示，站址截断。"""
+    d = dict(d)
+    if "password" in d:
+        d["password"] = "****"
+    if "center_addr" in d and d["center_addr"]:
+        d["center_addr"] = d["center_addr"][:2] + "**"
+    if "station_addr" in d and d["station_addr"]:
+        d["station_addr"] = d["station_addr"][:4] + "******"
+    return d
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="SL651 / SL427 水文规约报文解码工具",
@@ -116,10 +128,10 @@ def main() -> int:
     p427 = sub.add_parser("sl427", help="SL427-2021 水资源监测数据传输规约")
 
     for p in (p651, p427):
-        p.add_argument("--hex", help="十六进制报文字符串")
-        p.add_argument("--file", "-f", help="从文件读取报文（每行一条）")
+        src = p.add_mutually_exclusive_group()
+        src.add_argument("--hex", help="十六进制报文字符串")
+        src.add_argument("--file", "-f", help="从文件读取报文（每行一条）")
         p.add_argument("--output", "-o", choices=["text", "json"], default="text", help="输出格式")
-        p.add_argument("--raw-only", action="store_true", help="仅输出原始报文")
 
     args = parser.parse_args()
 
@@ -133,13 +145,18 @@ def main() -> int:
         if not file_path.exists():
             print(f"错误: 文件不存在: {file_path}", file=sys.stderr)
             return 1
-        for line in file_path.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = file_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"错误: 文件读取失败: {e}", file=sys.stderr)
+            return 1
+        for line in lines:
             line = line.strip()
             if line and not line.startswith("#"):
                 messages.append(line)
     elif args.hex:
         messages.append(args.hex)
-    else:
+    elif not sys.stdin.isatty():
         stdin_data = sys.stdin.read().strip()
         if stdin_data:
             for line in stdin_data.splitlines():
@@ -175,7 +192,7 @@ def main() -> int:
             "total": len(messages),
             "success": len(results),
             "failed": len(errors),
-            "results": [r.to_dict() for r in results],
+            "results": [_sanitize_dict(r.to_dict()) for r in results],
             "errors": [{"index": idx, "message": msg, "error": err} for idx, msg, err in errors],
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))

@@ -18,7 +18,7 @@ class SoilStation(BaseStation):
         self.voltage_gen = VoltageGenerator()
 
     def generate_elements(self) -> list[tuple[int, float, int, int]]:
-        moisture, _temps = self.soil_gen.next()
+        moisture, _temps = self.soil_gen.next(self.tick)
         return [
             (0x10, moisture[0], 2, 1),  # 10cm 土壤含水量
             (0x11, moisture[1], 2, 1),  # 20cm

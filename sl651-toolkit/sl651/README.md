@@ -10,7 +10,7 @@
 |------|------|
 | `bcd.py` | BCD 编解码（大端/小端）、时间编解码、hex↔bytes 转换 |
 | `crc.py` | CRC-16/MODBUS（0xA001，初值 0xFFFF）、CRC8（0xE5，供 sl427 使用） |
-| `constants.py` | 协议常量：101 项 `SL651_ELEMENTS`、140+ 项 `SL651_ASCII_ELEMENTS`、FF 子标识符、FUNC_MAP（13 项）、STATION_TYPE（11 类）、STATUS_BITS（12 bit）、帧偏移常量 |
+| `constants.py` | 协议常量：101 项 `SL651_ELEMENTS`、102 项 `SL651_ASCII_ELEMENTS`、FF 子标识符、FUNC_MAP（23 项）、STATION_TYPE（11 类）、STATUS_BITS（12 bit）、帧偏移常量 |
 | `decoder.py` | 报文解码器：定义符动态解析、ASCII 帧解析、状态位解码、CRC 校验 |
 | `encoder.py` | 报文编码器：上行 5 类 + 下行 4 类 + ASCII 编码 + 通用帧构造 |
 
@@ -75,7 +75,8 @@ enc = SL651Encoder(
 | `build_hourly_frame(water_levels, inst_level, voltage, obs_time)` | 0x34 | 小时报（含 12×F5 数组） |
 | `build_link_maintain_frame()` | 0x2F | 链路维持 |
 | `build_ascii_frame(elements, obs_time)` | 0x32 | ASCII 编码（SOH 起始） |
-| `build_query_frame(element_guides)` | 0x37 | 下行查询（结束符 ENQ） |
+| `build_query_frame()` | 0x37 | 下行查询所有实时数据（空正文，结束符 ENQ） |
+| `build_query_body(element_guides)` | 3AH | 下行查询指定要素（正文含引导符） |
 | `build_set_param_frame(params)` | 0x40 | 下行参数设置（结束符 ENQ） |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行时钟校准（结束符 ENQ） |
 | `build_reset_frame()` | 0x48 | 下行恢复出厂（结束符 ENQ） |

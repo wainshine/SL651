@@ -156,7 +156,9 @@ def _safe_hex_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
     return (r, hex_str.upper())
 
 
-def _build_byte_map(bytes_list: list[int], direction: int, etx_pos: int) -> str:
+def _build_byte_map(bytes_list: list[int], direction: int, etx_pos: int, syn_pad: int = 0) -> str:
+    f1_pos = 22 + syn_pad  # F1F1 站码标识（上行）
+    f0_pos = 30 + syn_pad  # F0F0 观测时间标识（上行）
     lines = []
     for offset in range(0, len(bytes_list), 16):
         chunk = bytes_list[offset: offset + 16]
@@ -164,26 +166,23 @@ def _build_byte_map(bytes_list: list[int], direction: int, etx_pos: int) -> str:
         for i, b in enumerate(chunk):
             h = f"{b:02X}"
             idx = offset + i
-            if offset == 0 and i < 2:
+            if idx < 2:
                 h = f"*{h}*"
-            elif offset == 2 and i == 0:
+            elif idx == 2:
                 h = f"[{h}]"
-            elif offset == 13 and i == 0:
+            elif idx == 13 or idx == etx_pos:
                 h = f"<{h}>"
-            elif idx == etx_pos:
+            elif direction == 0 and idx in (f1_pos, f1_pos + 1, f0_pos, f0_pos + 1):
                 h = f"<{h}>"
             elif idx > etx_pos:
                 h = f"*{h}*"
-            elif direction == 0 and 22 <= offset <= 23 and idx < 24:
-                h = f"<{h}>"
-            elif direction == 0 and 30 <= offset <= 31 and idx < 32:
-                h = f"<{h}>"
             parts.append(h)
         lines.append(" ".join(parts))
     return "\n".join(lines)
 
 
-def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int) -> list[dict]:
+def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int, syn_pad: int = 0) -> list[dict]:
+    p = syn_pad  # SYN 多包帧正文字段整体后移 3 字节
     fields = [
         (0, 1, "帧起始符 7E7E"),
     ]
@@ -194,15 +193,19 @@ def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int) -> li
             (8, 9, "密码"),
             (10, 10, "功能码"),
             (11, 12, "报文标识(方向+长度)"),
-            (13, 13, "STX(02)"),
-            (14, 15, "流水号"),
-            (16, 21, "发报时间(BCD 6B)"),
-            (22, 23, "站码标识 F1F1"),
-            (24, 28, "站码(5字节)"),
-            (29, 29, "测站类别"),
-            (30, 31, "观测时间标识 F0F0"),
-            (32, 36, "观测时间(BCD 5B)"),
-            (37, etx_pos - 1, "水文要素数据"),
+            (13, 13, "STX(02)/SYN(16)"),
+        ]
+        if syn_pad:
+            fields.append((14, 16, "SYN 多包(包总数/序列/包长)"))
+        fields += [
+            (14 + p, 15 + p, "流水号"),
+            (16 + p, 21 + p, "发报时间(BCD 6B)"),
+            (22 + p, 23 + p, "站码标识 F1F1"),
+            (24 + p, 28 + p, "站码(5字节)"),
+            (29 + p, 29 + p, "测站类别"),
+            (30 + p, 31 + p, "观测时间标识 F0F0"),
+            (32 + p, 36 + p, "观测时间(BCD 5B)"),
+            (37 + p, etx_pos - 1, "水文要素数据"),
         ]
     else:
         fields += [
@@ -211,10 +214,14 @@ def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int) -> li
             (8, 9, "密码"),
             (10, 10, "功能码"),
             (11, 12, "报文标识"),
-            (13, 13, "STX(02)"),
-            (14, 15, "流水号"),
-            (16, 21, "发报时间(BCD 6B)"),
-            (22, etx_pos - 1, "响应数据"),
+            (13, 13, "STX(02)/SYN(16)"),
+        ]
+        if syn_pad:
+            fields.append((14, 16, "SYN 多包(包总数/序列/包长)"))
+        fields += [
+            (14 + p, 15 + p, "流水号"),
+            (16 + p, 21 + p, "发报时间(BCD 6B)"),
+            (22 + p, etx_pos - 1, "响应数据"),
         ]
     fields.append((etx_pos, etx_pos, f"ETX({bytes_list[etx_pos]:02X})"))
     fields.append((etx_pos + 1, etx_pos + 2, "CRC16"))
@@ -274,7 +281,6 @@ class SL651Decoder:
             ident_raw = int(frame[19:23].decode("ascii"), 16)
             serial_raw = int(frame[24:28].decode("ascii"), 16)
             tx_time_bytes = bytes.fromhex(frame[28:40].decode("ascii"))
-            crc_raw = frame[-4:].decode("ascii")
         except (ValueError, UnicodeDecodeError) as e:
             raise DecodeError(f"ASCII 报文头部解析失败: {e}") from e
         ident_hi = (ident_raw >> 8) & 0xFF
@@ -298,7 +304,10 @@ class SL651Decoder:
 
         crc_data = bytes(frame[:etx_pos + 1])
         calc_crc = crc16(crc_data)
-        recv_crc = int(frame[etx_pos + 1:etx_pos + 1 + C.ASCII_CRC_LEN].decode("ascii"), 16)
+        try:
+            recv_crc = int(frame[etx_pos + 1:etx_pos + 1 + C.ASCII_CRC_LEN].decode("ascii"), 16)
+        except (ValueError, UnicodeDecodeError) as e:
+            raise DecodeError(f"ASCII 报文 CRC 字段解析失败: {e}") from e
 
         data_bytes = bytes(bytes_list[C.ASCII_DATA_OFFSET:etx_pos])
 
@@ -316,9 +325,8 @@ class SL651Decoder:
         obs_display = ""
 
         elements = self._parse_ascii_elements(data_bytes)
-        if elements:
-            obs_hex, obs_display, stn_type_hex, stn_type_name = \
-                self._extract_ascii_times(data_bytes)
+        obs_hex, obs_display, stn_type_hex, stn_type_name = \
+            self._extract_ascii_times(data_bytes)
 
         byte_map = ""
         byte_table = []
@@ -404,6 +412,7 @@ class SL651Decoder:
             f1_pos = C.F1_OFFSET + syn_pad
             f0_pos = C.F0_OFFSET + syn_pad
             can_parse_stn = (
+                f0_pos + 1 < etx_pos and
                 bytes_list[f1_pos] == 0xF1 and bytes_list[f1_pos + 1] == 0xF1 and
                 bytes_list[f0_pos] == 0xF0 and bytes_list[f0_pos + 1] == 0xF0
             )
@@ -441,8 +450,8 @@ class SL651Decoder:
         else:
             elements = self._parse_elements(data_bytes)
 
-        byte_map = _build_byte_map(bytes_list, direction, etx_pos)
-        byte_table = _build_byte_table(bytes_list, direction, etx_pos)
+        byte_map = _build_byte_map(bytes_list, direction, etx_pos, syn_pad)
+        byte_table = _build_byte_table(bytes_list, direction, etx_pos, syn_pad)
 
         return DecodedMessage(
             hex_input=bytes_to_hex_compact(frame),
@@ -500,6 +509,9 @@ class SL651Decoder:
             if code == "f1" and def_hex == "f1":
                 pos += 12
                 continue
+            if code in ("f0", "f1"):
+                # F0/F1 引导符但定义符不匹配，报文已失同步，终止要素解析
+                break
 
             is_cust = False
             f_len, f_dec = d_len, d_dec
@@ -524,11 +536,12 @@ class SL651Decoder:
             if not raw_hex:
                 break
 
-            is_neg = raw_hex[:2] == "ff" and f_len > 1
             entry = C.SL651_CUSTOM.get(code[2:]) if is_cust else C.SL651_ELEMENTS.get(code)
             desc = entry[0] if entry else f"未知({code.upper()})"
             unit = entry[1] if entry else ""
             dt = entry[2] if entry else None
+            # 0xFF 负数前缀仅适用 BCD 编码（规约 6.6.3.3），Hex 型数据的 0xFF 是合法字节
+            is_neg = raw_hex[:2] == "ff" and f_len > 1 and dt != "Hex"
 
             if dt == "STATUS":
                 elements.extend(self._parse_status(raw_hex, f_len))
@@ -628,7 +641,10 @@ class SL651Decoder:
             # tokens[i+1] = station code, tokens[i+2] = station type hex
             if i + 2 < len(tokens):
                 stn_type_hex = tokens[i + 2]
-                stn_type = int(stn_type_hex, 16) if len(stn_type_hex) == 2 else 0
+                try:
+                    stn_type = int(stn_type_hex, 16) if len(stn_type_hex) == 2 else -1
+                except ValueError:
+                    stn_type = -1
                 stn_type_name = C.STATION_TYPE.get(stn_type, "未知")
             i += 3
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from sl651 import SL651Encoder
 
 from .base_station import BaseStation
-from .sender import Sender
+from .sender import SendError, Sender
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ class StationRunner:
         self.alert_threshold = alert_threshold
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._alert_active = False  # 加报状态，用于边沿触发（防止持续满足条件时每周期重复加报）
 
     def start(self) -> None:
         self._stop.clear()
@@ -71,11 +72,15 @@ class StationRunner:
                                  len(frame))
 
                 if self.enable_alert:
-                    triggered = False
-                    if hasattr(self.station, 'is_raining') and self.station.is_raining:
-                        triggered = True
-                    if hasattr(self.station, 'check_alert_trigger'):
-                        triggered = self.station.check_alert_trigger(self.alert_threshold)
+                    # 边沿触发：仅在条件由不满足变为满足时加报一次
+                    if hasattr(self.station, 'is_raining'):
+                        raw_triggered = bool(self.station.is_raining)
+                    elif hasattr(self.station, 'check_alert_trigger'):
+                        raw_triggered = self.station.check_alert_trigger(self.alert_threshold)
+                    else:
+                        raw_triggered = False
+                    triggered = raw_triggered and not self._alert_active
+                    self._alert_active = raw_triggered
 
                     if triggered:
                         trigger = None
@@ -93,6 +98,9 @@ class StationRunner:
                                          len(alert_frame))
 
                 self.station.advance(int(self.interval / 60) or 1)
+            except SendError as e:
+                logger.error("[%s] 发送器致命错误，站点停止: %s", self.station.station_addr, e)
+                break
             except Exception:
                 logger.exception("[%s] 上报异常", self.station.station_addr)
             self._stop.wait(self.interval)
@@ -143,4 +151,7 @@ class SimulatorEngine:
     def stop(self) -> None:
         for runner in self.runners:
             runner.stop()
+        for runner in self.runners:
+            if runner._thread is not None:
+                runner._thread.join(timeout=2)
         self.sender.close()

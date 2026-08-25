@@ -111,8 +111,8 @@ class SoilMoistureGenerator:
         """注入降雨影响。"""
         self.rain_influence += intensity * 0.5
 
-    def next(self) -> tuple[list[float], list[float]]:
-        """返回 (各层含水量列表, 各层温度列表)。"""
+    def next(self, tick: int = 0) -> tuple[list[float], list[float]]:
+        """返回 (各层含水量列表, 各层温度列表)。tick 为分钟序号。"""
         new_moisture = []
         for i, m in enumerate(self.layers):
             # 降雨影响逐层衰减
@@ -128,8 +128,11 @@ class SoilMoistureGenerator:
 
         new_temps = []
         for i, t in enumerate(self.temps):
-            daily = 2 * math.sin(2 * math.pi * (i + 1) / 1440)
-            t += random.gauss(0, 0.05) + daily * 0.001
+            # 日周期目标温度（24h=1440min），围绕层基准值波动 + 均值回归，防漂移
+            base = 22.0 - i
+            target = base + 2 * math.sin(2 * math.pi * (tick % 1440) / 1440)
+            t += (target - t) * 0.02 + random.gauss(0, 0.05)
+            t = max(-30.0, min(60.0, t))
             new_temps.append(round(t, 1))
         self.temps = new_temps
 

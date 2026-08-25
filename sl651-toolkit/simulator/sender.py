@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import socket
 import subprocess
+import threading
 import time
 from abc import ABC, abstractmethod
 
@@ -97,7 +98,10 @@ class MqttxSender(Sender):
 
 
 class TcpSender(Sender):
-    """通过 TCP socket 发送原始 SL651 帧。"""
+    """通过 TCP socket 发送原始 SL651 帧。
+
+    多站点共享同一实例时是线程安全的（内部持锁串行化发送）。
+    """
 
     def __init__(
         self,
@@ -112,6 +116,7 @@ class TcpSender(Sender):
         self.reconnect = reconnect
         self._sock: socket.socket | None = None
         self._connected = False
+        self._lock = threading.Lock()
 
     def _ensure_connected(self) -> None:
         if self._connected and self._sock is not None:
@@ -122,33 +127,36 @@ class TcpSender(Sender):
             self._sock.connect((self.host, self.port))
             self._connected = True
         except OSError as e:
-            self._sock = None
-            self._connected = False
+            self._close_sock()
             logger.warning("TCP 连接 %s:%d 失败: %s", self.host, self.port, e)
 
-    def send(self, hex_msg: str, station_addr: str = "") -> bool:
-        try:
-            self._ensure_connected()
-            if self._sock is None:
-                if self.reconnect:
-                    time.sleep(1)
-                    self._ensure_connected()
-                if self._sock is None:
-                    return False
-            frame = bytes.fromhex(hex_msg)
-            self._sock.sendall(frame)
-            return True
-        except (socket.timeout, ConnectionError, OSError) as e:
-            logger.warning("TCP 发送失败: %s", e)
-            self._connected = False
-            self._sock = None
-            return False
-
-    def close(self) -> None:
-        if self._sock:
+    def _close_sock(self) -> None:
+        if self._sock is not None:
             try:
                 self._sock.close()
             except OSError:
                 pass
             self._sock = None
-            self._connected = False
+        self._connected = False
+
+    def send(self, hex_msg: str, station_addr: str = "") -> bool:
+        with self._lock:
+            try:
+                self._ensure_connected()
+                if self._sock is None:
+                    if self.reconnect:
+                        time.sleep(1)
+                        self._ensure_connected()
+                    if self._sock is None:
+                        return False
+                frame = bytes.fromhex(hex_msg)
+                self._sock.sendall(frame)
+                return True
+            except (socket.timeout, ConnectionError, OSError) as e:
+                logger.warning("TCP 发送失败: %s", e)
+                self._close_sock()
+                return False
+
+    def close(self) -> None:
+        with self._lock:
+            self._close_sock()

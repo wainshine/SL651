@@ -1,7 +1,7 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.2.4  
-> 最后更新：2026-07-17  
+> 版本：v1.2.5  
+> 最后更新：2026-08-26  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
 ---
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 24 项）
+├── tests/          测试脚本（test_sl651.py, 37 项 + test_round1_blindspots.py, 10 项）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -112,7 +112,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
     return (b >> 3) & 0x1F, b & 0x07
 ```
 
-**要素标识符表（规约附录C）** — 101 项已全部收录。支持 HEX/BCD 引导符表 `SL651_ELEMENTS` 和 ASCⅡ 标识符表 `SL651_ASCII_ELEMENTS`（161 项）。**FF 子标识符**已收录北京水务平台自定义要素（GPRS信号、机箱温度、地温、垂线流速等）及水测家自定义要素。
+**要素标识符表（规约附录C）** — 101 项已全部收录。支持 HEX/BCD 引导符表 `SL651_ELEMENTS` 和 ASCⅡ 标识符表 `SL651_ASCII_ELEMENTS`（102 项）。**FF 子标识符**已收录北京水务平台自定义要素（GPRS信号、机箱温度、地温、垂线流速等）及水测家自定义要素。
 
 **负数 BCD 编码（规约 6.6.3.3a）**：首字节 `0xFF` 表示负数。
 
@@ -311,8 +311,20 @@ python web/app.py
 | `test_simulator_engine_smoke` | 模拟器 | 引擎冒烟测试 |
 | `test_hourly_frame_validation` | SL651 | 小时报 12 组校验 |
 | `test_recharge_le_bcd` | SL427 | 充值量小端 BCD |
+| `test_sl651_truncated_uplink` | SL651 | 截断上行帧抛 DecodeError（非 IndexError） |
+| `test_sl427_malformed_bcd` | SL427 | 非法 BCD/最小 L 抛 DecodeError |
+| `test_tcp_sender_threadsafe` | 模拟器 | 多线程共享 TcpSender 帧不交错 |
+| `test_sl651_hex_type_ff` | SL651 | Hex 型要素 0xFF 不误判负数 |
+| `test_sl651_encoder_validation` | SL651 | 编码器定义符/水位/负数/地址校验 |
+| `test_sl427_encoder_validation` | SL427 | encode_address/Tp/build_frame/PW 校验 |
+| `test_sl427_ff_tp_strip` | SL427 | AFN=FFH 尾部 Tp 剥离 |
+| `test_web_api` | Web | /api/decode 400 路径 + 密码脱敏 + SL427 字段 |
+| `test_cli_json_masking` | CLI | JSON 输出脱敏（密码/站址截断） |
+| `test_simulator_yaml_validation` | 模拟器 | YAML/端口/地址/间隔校验 |
+| `test_soil_temp_bounded` | 模拟器 | 墒情温度 5000 步有界 |
+| `test_alert_edge_trigger` | 模拟器 | 加报边沿触发 |
 
-**总计: 25 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
+**总计: 37 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 

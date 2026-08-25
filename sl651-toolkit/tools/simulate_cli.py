@@ -51,11 +51,31 @@ STATION_TYPE_MAP = {
 }
 
 
-def parse_host_port(s: str) -> tuple[str, int]:
+def parse_host_port(s: str, default_port: int = 1883) -> tuple[str, int]:
     parts = s.rsplit(":", 1)
     host = parts[0]
-    port = int(parts[1]) if len(parts) > 1 else 1883
+    if len(parts) > 1:
+        try:
+            port = int(parts[1])
+        except ValueError:
+            raise ValueError(f"端口不是数字: {s!r}")
+        if not 1 <= port <= 65535:
+            raise ValueError(f"端口超范围(1~65535): {port}")
+    else:
+        port = default_port
+    if not host:
+        raise ValueError(f"主机名为空: {s!r}")
     return host, port
+
+
+def _validate_addr(addr: str) -> None:
+    if len(addr) != 10 or any(c not in "0123456789abcdefABCDEF" for c in addr):
+        raise ValueError(f"遥测站地址必须为 10 位十六进制: {addr!r}")
+
+
+def _validate_interval(interval: float) -> None:
+    if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
+        raise ValueError(f"interval 必须为正数秒，当前: {interval!r}")
 
 
 def main() -> int:
@@ -111,19 +131,27 @@ def main() -> int:
     if args.type == "water_level":
         station_kwargs["base_level"] = args.base_level
 
-    station = station_cls(**station_kwargs)
+    try:
+        _validate_addr(args.addr)
+        _validate_interval(args.interval)
+        station = station_cls(**station_kwargs)
+    except ValueError as e:
+        parser.error(str(e))
     station_type = STATION_TYPE_MAP[args.type]
 
-    if args.proto == "mqtt":
-        host, port = parse_host_port(args.broker)
-        sender = MqttxSender(
-            host=host, port=port,
-            username=args.username, password=args.password,
-            topic_template=args.topic,
-        )
-    else:
-        host, port = parse_host_port(args.target)
-        sender = TcpSender(host=host, port=port, reconnect=True)
+    try:
+        if args.proto == "mqtt":
+            host, port = parse_host_port(args.broker, default_port=1883)
+            sender = MqttxSender(
+                host=host, port=port,
+                username=args.username, password=args.password,
+                topic_template=args.topic,
+            )
+        else:
+            host, port = parse_host_port(args.target, default_port=5001)
+            sender = TcpSender(host=host, port=port, reconnect=True)
+    except ValueError as e:
+        parser.error(str(e))
 
     try:
         engine = SimulatorEngine(sender)
@@ -152,45 +180,85 @@ def _load_config(config_path: str) -> int:
         print("需要 PyYAML: pip install PyYAML>=6.0", file=sys.stderr)
         return 1
 
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+    except OSError as e:
+        print(f"配置文件读取失败: {e}", file=sys.stderr)
+        return 1
+    except yaml.YAMLError as e:
+        print(f"YAML 解析失败: {e}", file=sys.stderr)
+        return 1
+
+    if not isinstance(config, dict):
+        print("配置文件为空或不是有效的 YAML 映射", file=sys.stderr)
+        return 1
 
     sender_cfg = config.get("sender", {})
+    if not isinstance(sender_cfg, dict):
+        print("sender 配置必须是映射", file=sys.stderr)
+        return 1
     proto = sender_cfg.get("proto", "mqtt")
-    if proto == "mqtt":
-        host, port = parse_host_port(sender_cfg.get("broker", "127.0.0.1:1883"))
-        sender = MqttxSender(
-            host=host, port=port,
-            username=sender_cfg.get("username", ""),
-            password=sender_cfg.get("password", ""),
-            topic_template=sender_cfg.get("topic", "sl651/{station_addr}/uplink"),
-        )
-    else:
-        host, port = parse_host_port(sender_cfg.get("target", "127.0.0.1:5001"))
-        sender = TcpSender(host=host, port=port, reconnect=True)
+    try:
+        if proto == "mqtt":
+            host, port = parse_host_port(str(sender_cfg.get("broker", "127.0.0.1:1883")), default_port=1883)
+            sender = MqttxSender(
+                host=host, port=port,
+                username=str(sender_cfg.get("username", "")),
+                password=str(sender_cfg.get("password", "")),
+                topic_template=str(sender_cfg.get("topic", "sl651/{station_addr}/uplink")),
+            )
+        else:
+            host, port = parse_host_port(str(sender_cfg.get("target", "127.0.0.1:5001")), default_port=5001)
+            sender = TcpSender(host=host, port=port, reconnect=True)
+    except ValueError as e:
+        print(f"sender 配置错误: {e}", file=sys.stderr)
+        return 1
+
+    stations_cfg = config.get("stations", [])
+    if not isinstance(stations_cfg, list):
+        print("stations 配置必须是列表", file=sys.stderr)
+        return 1
 
     engine = SimulatorEngine(sender)
-    for sc in config.get("stations", []):
+    for idx, sc in enumerate(stations_cfg):
+        if not isinstance(sc, dict):
+            print(f"stations[{idx}] 必须是映射", file=sys.stderr)
+            return 1
         stype = sc.get("type", "water_level")
+        if stype not in STATION_MAP:
+            print(f"stations[{idx}] 未知站点类型: {stype!r}（可选: {list(STATION_MAP)}）", file=sys.stderr)
+            return 1
         cls = STATION_MAP[stype]
         kwargs = {"station_addr": str(sc.get("addr", "1234567890"))}
         if stype == "water_level":
             kwargs["base_level"] = sc.get("base_level", 5.0)
 
-        station = cls(**kwargs)
+        try:
+            _validate_addr(kwargs["station_addr"])
+            interval = sc.get("interval", 300)
+            _validate_interval(interval)
+            station = cls(**kwargs)
+        except (ValueError, TypeError) as e:
+            print(f"stations[{idx}] 配置错误: {e}", file=sys.stderr)
+            return 1
         station_type = STATION_TYPE_MAP[stype]
         engine.add_station(
             station,
             center_addr=sc.get("center", 1),
             password=sc.get("password", 0),
             station_type=station_type,
-            interval=sc.get("interval", 300),
+            interval=interval,
             function_code=sc.get("function_code", 0x32),
             enable_alert=sc.get("enable_alert", False),
             alert_threshold=sc.get("alert_threshold", 0.05),
         )
 
-    engine.start()
+    try:
+        engine.start()
+    except SendError as e:
+        print(str(e), file=sys.stderr)
+        return 1
     return 0
 
 

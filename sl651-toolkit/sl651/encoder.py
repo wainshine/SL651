@@ -17,12 +17,18 @@ class EncodeError(Exception):
 
 
 def _make_def_byte(data_len: int, decimals: int = 0) -> int:
+    if not 0 <= data_len <= 31:
+        raise EncodeError(f"数据字节数超范围(0~31): {data_len}")
+    if not 0 <= decimals <= 7:
+        raise EncodeError(f"小数位数超范围(0~7): {decimals}")
     return ((data_len & 0x1F) << 3) | (decimals & 0x07)
 
 
 def _encode_bcd(value: float, data_len: int, decimals: int) -> bytes:
     """浮点数 -> BCD 编码字节。负数按 SL651 6.6.3.3 用 0xFF 前缀。"""
     negative = value < 0
+    if negative and data_len < 2:
+        raise EncodeError(f"负数编码至少需要 2 字节（0xFF 前缀 + 数据），当前 data_len={data_len}")
     scaled = round(abs(value) * (10 ** decimals))
     if negative:
         bcd = int_to_bcd_bytes(scaled, data_len - 1)
@@ -43,7 +49,9 @@ class SL651Encoder:
         password: int = 0,
         station_type: int = 0x4B,
     ):
-        self.center_addr = center_addr & 0xFF
+        if not 1 <= center_addr <= 254:
+            raise EncodeError(f"center_addr 超范围(1~254): {center_addr}")
+        self.center_addr = center_addr
         self.station_addr_hex = station_addr
         if len(station_addr) != 10:
             raise EncodeError(f"station_addr 必须为 10 位十六进制字符串，当前: {station_addr!r}")
@@ -51,8 +59,12 @@ class SL651Encoder:
             self.station_addr_bytes = bytes.fromhex(station_addr)
         except ValueError:
             raise EncodeError(f"station_addr 不是有效 hex: {station_addr!r}")
-        self.password = password & 0xFFFF
-        self.station_type = station_type & 0xFF
+        if not 0 <= password <= 0xFFFF:
+            raise EncodeError(f"password 超范围(0~0xFFFF): {password}")
+        if not 0 <= station_type <= 0xFF:
+            raise EncodeError(f"station_type 超范围(0~0xFF): {station_type}")
+        self.password = password
+        self.station_type = station_type
         self._serial = int(datetime.now().timestamp()) % 65535 + 1
 
 
@@ -71,6 +83,8 @@ class SL651Encoder:
         end_marker: 报文结束符，上行默认 ETX(03H)，下行按帧类型选 ENQ/ACK/EOT/NAK/ESC。
         tx_time: 发报时间，默认当前时间。下行 4AH 校时帧传此值作为校时时钟。
         """
+        if not 0 <= function_code <= 0xFF:
+            raise EncodeError(f"function_code 超范围(0~0xFF): {function_code}")
         if end_marker is None:
             end_marker = C.ETX
 
@@ -255,6 +269,8 @@ class SL651Encoder:
                 val = int(round(wl * 100))
                 if val < 0:
                     body.extend(b'\xFF\xFF')
+                elif val > 0xFFFF:
+                    raise EncodeError(f"小时报水位超范围(最大 655.35m): {wl}")
                 else:
                     body.extend(val.to_bytes(2, 'big'))
 

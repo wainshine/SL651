@@ -2,7 +2,7 @@
 
 > 角色：业务测试1代  
 > 接棒时间：2026-07-01  
-> 基线版本：v1.2.4  
+> 基线版本：v1.2.5  
 > 接手前必读：`docs/project.md` + `README.md` + `docs/handoff_main.md` + 本文档
 
 ---

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from sl651.bcd import (
@@ -72,6 +71,8 @@ class DecodedMessage:
                 {"name": e.name, "value": e.value, "unit": e.unit, "raw": e.raw}
                 for e in self.elements
             ],
+            "frame_length": self.frame_length,
+            "data_len": self.data_len,
         }
 
 
@@ -323,6 +324,14 @@ class SL427Decoder:
         return self.decode(bytes.fromhex(cleaned))
 
     def decode(self, frame: bytes) -> DecodedMessage:
+        try:
+            return self._decode_inner(frame)
+        except DecodeError:
+            raise
+        except (ValueError, IndexError) as e:
+            raise DecodeError(f"报文解析失败: {e}") from e
+
+    def _decode_inner(self, frame: bytes) -> DecodedMessage:
         bytes_list = list(frame)
         total = len(bytes_list)
 
@@ -346,6 +355,10 @@ class SL427Decoder:
         recv_crc = bytes_list[cs_pos]
 
         ctrl = C.parse_ctrl(bytes_list[3])
+        # 最小 L 校验: C(1B+分帧扩展) + A(5B) + AFN(1B)
+        min_l = 8 if ctrl["div"] == 1 else 7
+        if data_len < min_l:
+            raise DecodeError(f"L={data_len} 小于最小用户区长度 {min_l}（C+A+AFN）")
         ctrl_func_name = C.CTRL_FUNC_MAP.get(ctrl["func_code"], {}).get("name", f"未知(0x{ctrl['func_code']:02X})")
 
         direction = "上行（遥测站→中心站）" if ctrl["dir"] else "下行（中心站→遥测站）"
@@ -528,10 +541,24 @@ class SL427Decoder:
                     ))
 
         elif afn_hex == "ff":
-            if func_code == 0x0E:
-                elements.extend(_parse_comprehensive(data_field))
+            # FFH 用户自定义扩展：按 AFN_TP_ONLY 声明含尾部 Tp(7B)，剥离后再解析数据域
+            ff_data = data_field
+            if len(data_field) > C.TP_LEN:
+                tp_bytes = data_field[-C.TP_LEN:]
+                ff_data = data_field[:-C.TP_LEN]
+                tp_str = _fmt_time_427(tp_bytes)
             else:
-                elements.extend(_parse_ctrl_func_data(func_code, data_field))
+                tp_str = ""
+            if func_code == 0x0E:
+                elements.extend(_parse_comprehensive(ff_data))
+            else:
+                elements.extend(_parse_ctrl_func_data(func_code, ff_data))
+            if tp_str:
+                elements.append(ElementValue(
+                    name="观测时间", value=tp_str, unit="",
+                    raw=bytes_to_hex_compact(data_field[-C.TP_LEN:]),
+                    is_time=True, byte_len=C.TP_LEN,
+                ))
 
         else:
             if 0x10 <= afn <= 0x4F and not is_downlink:

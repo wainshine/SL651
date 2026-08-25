@@ -8,7 +8,7 @@
 
 | 文件 | 说明 |
 |------|------|
-| `constants.py` | 协议常量：AFN 表（32 项）、控制功能码表（16 种）、告警/终端状态位、`parse_ctrl`/`make_ctrl` |
+| `constants.py` | 协议常量：AFN 表（30 项）、控制功能码表（16 种）、告警/终端状态位、`parse_ctrl`/`make_ctrl` |
 | `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派数据解析 |
 | `encoder.py` | 68H 帧编码器：自报 5 类 + 参数设置 6 类 + 通用模板 |
 

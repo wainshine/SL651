@@ -1,7 +1,7 @@
 # SL651-Toolkit 交接文档
 
-> 最后更新：2026-07-17  
-> 版本：v1.2.4  
+> 最后更新：2026-08-26  
+> 版本：v1.2.5  
 > 接手前必读：`docs/project.md` + 项目 `README.md` + 本文档
 
 ---
@@ -21,18 +21,18 @@
 ### 1.1 测试状态
 
 ```
-24 项测试全部通过
+37 项测试全部通过（另有盲区测试 10 项）
 福建 23 条真实报文 CRC 全通过
 北京 25 条真实报文 CRC 全通过
 ```
 
 ### 1.2 版本号
 
-`sl651/__init__.py:__version__ = "1.2.4"`
+`sl651/__init__.py:__version__ = "1.2.5"`
 
 ### 1.3 完成的审计轮次
 
-v1.1~v2.0，共 10 轮，全部缺陷已闭环。v1.10/v2.0 综合参数/小时报F4/统计雨量等缺陷在 v1.2.4 全部修复。
+v1.1~v2.1，共 11 轮，全部缺陷已闭环。v1.10/v2.0 综合参数/小时报F4/统计雨量等缺陷在 v1.2.4 全部修复；v2.1 异常契约/线程安全/编码器校验等缺陷在 v1.2.5 全部修复。
 
 ---
 
@@ -46,7 +46,7 @@ v1.1~v2.0，共 10 轮，全部缺陷已闭环。v1.10/v2.0 综合参数/小时�
 | ASCII 帧解码 (SOH起始) | ✅ | `sl651/decoder.py:_parse_ascii_elements` |
 | 定义符动态解析 | ✅ | `sl651/constants.py:parse_def_byte` |
 | 101 项要素标识符 | ✅ | `sl651/constants.py:SL651_ELEMENTS` |
-| 161 项 ASCII 标识符 | ✅ | `sl651/constants.py:SL651_ASCII_ELEMENTS` |
+| 102 项 ASCII 标识符 | ✅ | `sl651/constants.py:SL651_ASCII_ELEMENTS` |
 | FF 子标识符（含北京/水测家） | ✅ | `sl651/constants.py:SL651_CUSTOM` |
 | 12-bit 状态位解码 | ✅ | `sl651/decoder.py:_parse_status` |
 | F4/F5 均匀报数组 | ✅ | `sl651/decoder.py:_parse_f4_array/_parse_f5_array` |
@@ -215,7 +215,7 @@ frame = enc.build_set_clock(datetime.now())  # 下行校时
 
 | 文件 | 内容 |
 |------|------|
-| `tests/test_sl651.py` | 24 项测试：BCD/CRC/定义符/编解码往返/福建23条/北京25条/模拟器冒烟等 |
+| `tests/test_sl651.py` | 37 项测试：BCD/CRC/定义符/编解码往返/福建23条/北京25条/模拟器冒烟/编码器校验/Web API 等 |
 | `examples/sample_messages.txt` | njnrs + 水测家示例 |
 | `examples/fujian_messages.txt` | 福建规定 23 条 (14种功能码) |
 | `examples/beijing_messages.txt` | 北京水务平台 25 条 (8测站, 3类报文) |

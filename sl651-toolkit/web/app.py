@@ -355,7 +355,7 @@ function renderResult(data) {
   if (data.crc_ok === true)  { pill.className = "crc-pill ok";  pill.textContent = "CRC 校验通过"; }
   else if (data.crc_ok === false) { pill.className = "crc-pill bad"; pill.textContent = "CRC 校验失败"; }
   else { pill.className = "crc-pill"; pill.textContent = ""; pill.style.display = "none"; }
-  if (data.crc_ok !== undefined) pill.style.display = "";
+  if (data.crc_ok === true || data.crc_ok === false) pill.style.display = "";
 
   var infoHtml = "";
   data.info.forEach(function (kv) {
@@ -424,7 +424,8 @@ function runDecode() {
 updateCount();
 </script>
 </body>
-</html"""
+</html>
+"""
 
 from sl651 import __version__ as TOOLKIT_VERSION
 
@@ -445,11 +446,13 @@ def frame_info(result: dict) -> dict:
     if "addr" in result:
         info["地址"] = result.get("addr", "")
     if "password" in result:
-        info["密码"] = result.get("password", "")
+        info["密码"] = "****"
     if "function_code" in result:
-        info["功能码"] = f"{result['function_code']} ({result.get('function_name', '')})".strip()
+        func_name = result.get("function_name") or ""
+        info["功能码"] = f"{result['function_code']} ({func_name})" if func_name else result["function_code"]
     if "afn" in result:
-        info["AFN"] = f"{result['afn']} ({result.get('afn_name', '')})".strip()
+        afn_name = result.get("afn_name") or ""
+        info["AFN"] = f"{result['afn']} ({afn_name})" if afn_name else result["afn"]
     if "ctrl_func_name" in result and result.get("ctrl_func_name"):
         info["控制功能"] = result["ctrl_func_name"]
     if "message_type" in result and result.get("message_type"):
@@ -470,6 +473,8 @@ def frame_info(result: dict) -> dict:
         info["编码"] = result["encoding"]
     if "frame_length" in result:
         info["帧长度"] = f"{result['frame_length']} 字节"
+    if "data_len" in result:
+        info["用户数据长度"] = f"{result['data_len']} 字节"
     if "crc_ok" in result:
         crc_pair = ""
         if "crc_received" in result:
@@ -498,13 +503,16 @@ def index():
 
 @app.route("/api/decode", methods=["POST"])
 def api_decode():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "请求体须为 JSON 对象"}), 400
     proto = payload.get("proto", "sl651")
-    hex_str = (payload.get("hex") or "").strip()
+    hex_raw = payload.get("hex")
     if proto not in ("sl651", "sl427"):
         return jsonify({"error": f"不支持的协议: {proto}"}), 400
-    if not hex_str:
-        return jsonify({"error": "报文为空"}), 400
+    if not isinstance(hex_raw, str) or not hex_raw.strip():
+        return jsonify({"error": "报文为空或不是字符串"}), 400
+    hex_str = hex_raw.strip()
     try:
         result = do_decode(proto, hex_str)
     except Exception as e:

@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.4
+# SL651 水文规约工具包 v1.2.5
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -19,7 +19,7 @@ sl651-toolkit/
 │   └── encoder.py              # 编码器（上行 5 类 + 下行 4 类 + ASCII）
 ├── sl427/                      # SL427 协议核心
 │   ├── README.md
-│   ├── constants.py            # 控制功能码(16)、AFN(32)、告警/终端状态
+│   ├── constants.py            # 控制功能码(16)、AFN(30)、告警/终端状态
 │   ├── decoder.py              # 68H 帧解析器（AUX 分离）
 │   └── encoder.py              # 68H 帧编码器（自报 5 类 + 参数 6 类）
 ├── simulator/                  # 设备模拟器
@@ -45,10 +45,11 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   └── test_sl651.py           # 24 项自测
+│   ├── test_sl651.py           # 37 项自测
+│   └── test_round1_blindspots.py  # 10 项盲区测试
 ├── docs/
 │   └── project.md              # 项目规格说明书
-├── audit/                      # 审计报告 v1.1~v1.8
+├── audit/                      # 审计报告 v1.1~v2.1
 ├── requirements.txt            # PyYAML>=6.0 + flask
 └── README.md
 ```
@@ -145,7 +146,7 @@ for e in r.elements:
 | `build_hourly_frame(levels, inst, v)` | 0x34 | 上行 | ETX | 小时报（含 12×F5 水位） |
 | `build_link_maintain_frame()` | 0x2F | 上行 | ETX | 链路维持 |
 | `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ASCII 编码（SOH 起始） |
-| `build_query_frame(guides)` | 0x37 | 下行 | ENQ | 查询要素 |
+| `build_query_frame()` | 0x37 | 下行 | ENQ | 查询所有实时数据 |
 | `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | 参数设置 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | 恢复出厂 |
@@ -220,6 +221,14 @@ python tests/test_sl651.py
 ---
 
 ## 五、版本历史
+
+- **v1.2.5**：审计 v2.1 修复版（4H+12M+20L 缺陷修复）+ Web 界面重写（亮色监控台风格）
+  - H: SL651 截断上行帧 IndexError、SL427 非法 BCD ValueError 泄漏、SL427 最小 L 校验、TcpSender 多线程加锁
+  - M: Hex 型要素 0xFF 误判负数、ASCII CRC/站类异常逃逸、编码器参数校验统一 EncodeError、AFN=FFH Tp 剥离
+  - M: 模拟器 YAML 配置校验、墒情温度漂移修复、加报边沿触发、TCP 缺省端口 5001
+  - M: Web /api/decode 输入校验 400、CLI JSON 输出与 Web 密码脱敏
+  - L: byte_map 高亮死代码修复、byte_table SYN 偏移、SL427 to_dict 补帧长度、CLI --raw-only 死参数移除
+  - 测试: 25 → 37 项；文档一致性修正 8 处（ASCII 102 项/AFN 30 项/FUNC_MAP 23 项等）
 
 - **v1.2.4**：审计 v2.0 修复版（3M+13L 缺陷修复）
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sl651.bcd import bcd_bytes_to_int, datetime_to_bcd, int_to_bcd, int_to_bcd_bytes, safe_bcd_to_int
+from sl651.bcd import int_to_bcd_bytes
 from sl651.crc import crc8
 from . import constants as C
 
@@ -17,6 +17,8 @@ class EncodeError(Exception):
 
 
 def _bcd_byte(val: int) -> int:
+    if not 0 <= val <= 99:
+        raise EncodeError(f"BCD 字节值超范围(0~99): {val}")
     return ((val // 10) << 4) | (val % 10)
 
 
@@ -33,9 +35,18 @@ def encode_address(method: int = 1, admin_code: int = 0, stn_id: int = 1, hex_co
         if len(hex_code) != 8:
             raise EncodeError(f"方式2 hex_code 必须为8位，当前: {hex_code!r}")
         result = bytearray([0x00])
-        for i in range(0, 8, 2):
-            result.append(int(hex_code[i:i + 2], 16))
+        try:
+            for i in range(0, 8, 2):
+                result.append(int(hex_code[i:i + 2], 16))
+        except ValueError:
+            raise EncodeError(f"方式2 hex_code 含非 hex 字符: {hex_code!r}") from None
         return bytes(result)
+    if method != 1:
+        raise EncodeError(f"method 只支持 1/2，当前: {method}")
+    if not 0 <= admin_code <= 999999:
+        raise EncodeError(f"admin_code 超范围(0~999999): {admin_code}")
+    if not 1 <= stn_id <= 60000:
+        raise EncodeError(f"stn_id 超范围(1~60000): {stn_id}")
     # 方式1
     admin_bcd = int_to_bcd_bytes(admin_code, 3)
     stn_bin = stn_id.to_bytes(2, "little")
@@ -50,6 +61,10 @@ def encode_tp(dt: datetime | None = None, delay: int = 0) -> bytes:
     """
     if dt is None:
         dt = datetime.now()
+    if not 2000 <= dt.year <= 2099:
+        raise EncodeError(f"Tp 年份超范围(2000~2099): {dt.year}")
+    if not 0 <= delay <= 255:
+        raise EncodeError(f"Tp 传输延时时长超范围(0~255): {delay}")
     return bytes([
         _bcd_byte(dt.second),
         _bcd_byte(dt.minute),
@@ -57,7 +72,7 @@ def encode_tp(dt: datetime | None = None, delay: int = 0) -> bytes:
         _bcd_byte(dt.day),
         _bcd_byte(dt.month),
         _bcd_byte(dt.year - 2000),
-        delay & 0xFF,
+        delay,
     ])
 
 
@@ -85,10 +100,21 @@ class SL427Encoder:
             tp: 时间标签 Tp (7B, None=不含)
             pw: 密码 PW (2B, None=不含)
         """
+        if not 0 <= afn <= 0xFF:
+            raise EncodeError(f"afn 超范围(0~0xFF): {afn}")
+        if not 0 <= ctrl_word <= 0xFF:
+            raise EncodeError(f"ctrl_word 超范围(0~0xFF): {ctrl_word}")
+        if tp is not None and len(tp) != 7:
+            raise EncodeError(f"tp 必须为 7 字节，当前 {len(tp)} 字节")
+        if pw is not None and len(pw) != 2:
+            raise EncodeError(f"pw 必须为 2 字节，当前 {len(pw)} 字节")
+        if len(self.addr_bytes) != 5:
+            raise EncodeError(f"addr_bytes 必须为 5 字节，当前 {len(self.addr_bytes)} 字节")
+
         user = bytearray()
-        user.append(ctrl_word & 0xFF)
+        user.append(ctrl_word)
         user.extend(self.addr_bytes)
-        user.append(afn & 0xFF)
+        user.append(afn)
         user.extend(data)
         if pw is not None:
             user.extend(pw)
@@ -96,6 +122,8 @@ class SL427Encoder:
             user.extend(tp)
 
         L = len(user)
+        if L > 255:
+            raise EncodeError(f"用户区长度超范围(L≤255): {L}")
         cs = crc8(bytes(user))
 
         frame = bytearray([C.START_BYTE, L, C.START_BYTE])
