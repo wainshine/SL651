@@ -21,7 +21,7 @@
 ### 1.1 测试状态
 
 ```
-37 项测试全部通过（另有盲区测试 10 项）
+41 项测试全部通过（另有盲区测试 10 项）
 福建 23 条真实报文 CRC 全通过
 北京 25 条真实报文 CRC 全通过
 ```
@@ -215,7 +215,7 @@ frame = enc.build_set_clock(datetime.now())  # 下行校时
 
 | 文件 | 内容 |
 |------|------|
-| `tests/test_sl651.py` | 37 项测试：BCD/CRC/定义符/编解码往返/福建23条/北京25条/模拟器冒烟/编码器校验/Web API 等 |
+| `tests/test_sl651.py` | 41 项测试：BCD/CRC/定义符/编解码往返/福建23条/北京25条/模拟器冒烟/编码器校验/Web API 等 |
 | `examples/sample_messages.txt` | njnrs + 水测家示例 |
 | `examples/fujian_messages.txt` | 福建规定 23 条 (14种功能码) |
 | `examples/beijing_messages.txt` | 北京水务平台 25 条 (8测站, 3类报文) |

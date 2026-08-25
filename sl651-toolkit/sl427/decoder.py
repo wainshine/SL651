@@ -148,15 +148,22 @@ def _parse_ctrl_func_data(func_code: int, data_bytes: bytes, max_items: int | No
 
 
 def _parse_signed_bcd(data: bytes, decimal: int) -> tuple[str, str]:
-    """解析有符号 BCD 值（小端）。"""
+    """解析有符号 BCD 值（小端）。高半字节 0xF=负号，0xA~0xE 为非法数据。"""
+    hex_str = bytes_to_hex_compact(data)
     last = data[-1]
-    neg = ((last >> 4) & 0x0F) == 0x0F
+    hi = (last >> 4) & 0x0F
+    if 0x0A <= hi <= 0x0E:
+        return ("-", hex_str)
+    neg = hi == 0x0F
     mod = bytearray(data)
     mod[-1] = last & 0x0F
-    v = bcd_bytes_to_int_le(bytes(mod))
+    try:
+        v = bcd_bytes_to_int_le(bytes(mod))
+    except ValueError:
+        return ("-", hex_str)
     d = 10 ** decimal
     r = (-1 if neg else 1) * v / d
-    return (f"{r:.{decimal}f}", bytes_to_hex_compact(data))
+    return (f"{r:.{decimal}f}", hex_str)
 
 
 def _parse_flow(data: bytes, decimal: int) -> tuple[str, str, str]:
@@ -194,11 +201,13 @@ def _parse_comprehensive(data: bytes) -> list[ElementValue]:
     for i in range(len(C.COMP_BITS)):
         if bit_flag & (1 << i):
             func_code = C.COMP_BITS[i]
+            definition = C.CTRL_FUNC_MAP.get(func_code)
+            item_len = definition["byteLen"] if definition else 0
             chunk = bytes(remaining[offset:])
             sub_items = _parse_ctrl_func_data(func_code, chunk, max_items=1)
             items.extend(sub_items)
-            consumed = sum(e.byte_len for e in sub_items)
-            offset += consumed
+            # 该 bit 对应定长数据块，无论是否解析出值（全 0xFF/0xAA 填充时无值）都必须跳过
+            offset += item_len
     return items
 
 
@@ -265,6 +274,9 @@ def _fmt_time_427(data: bytes) -> str:
     month = safe_bcd_to_int(data[4]) or 0
     year = safe_bcd_to_int(data[5]) or 0
     delay = data[6] if len(data) > 6 else 0
+    if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23
+            and min_val <= 59 and sec <= 59):
+        return f"无效时间({bytes_to_hex_compact(data[:6])})"
     r = f"20{year:02d}-{month:02d}-{day:02d} {hour:02d}:{min_val:02d}:{sec:02d}"
     if delay > 0:
         r += f" (传输延时限{delay}min)"

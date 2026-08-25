@@ -257,6 +257,11 @@ class SL651Decoder:
     def decode(self, frame: bytes) -> DecodedMessage:
         if len(frame) < C.BODY_OFFSET + 4:
             raise DecodeError(f"报文太短: {len(frame)} 字节")
+        if frame[0] == C.START_BYTE:
+            if len(frame) < 2 or frame[1] != C.START_BYTE:
+                raise DecodeError("报文起始符应为 7E7E")
+        elif frame[0] != C.SOH:
+            raise DecodeError(f"报文不是以 7E7E(HEX/BCD) 或 01(ASCII) 开头: {frame[0]:02X}H")
 
         bytes_list = list(frame)
         total = len(bytes_list)

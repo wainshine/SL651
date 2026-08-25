@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 37 项 + test_round1_blindspots.py, 10 项）
+├── tests/          测试脚本（test_sl651.py, 41 项 + test_round1_blindspots.py, 10 项）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -323,8 +323,12 @@ python web/app.py
 | `test_simulator_yaml_validation` | 模拟器 | YAML/端口/地址/间隔校验 |
 | `test_soil_temp_bounded` | 模拟器 | 墒情温度 5000 步有界 |
 | `test_alert_edge_trigger` | 模拟器 | 加报边沿触发 |
+| `test_sl651_decode_entry_check` | SL651 | decode(bytes) 入口起始符校验 |
+| `test_sl427_comprehensive_offset` | SL427 | 综合参数 0xAA 填充后偏移正确 |
+| `test_sl427_signed_bcd_invalid_nibble` | SL427 | 有符号 BCD 非法半字节降级 `-` |
+| `test_sl427_invalid_time_display` | SL427 | 非法 BCD 日期占位显示 |
 
-**总计: 37 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
+**总计: 41 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 

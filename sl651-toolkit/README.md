@@ -45,7 +45,7 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── test_sl651.py           # 37 项自测
+│   ├── test_sl651.py           # 41 项自测
 │   └── test_round1_blindspots.py  # 10 项盲区测试
 ├── docs/
 │   └── project.md              # 项目规格说明书
@@ -228,7 +228,8 @@ python tests/test_sl651.py
   - M: 模拟器 YAML 配置校验、墒情温度漂移修复、加报边沿触发、TCP 缺省端口 5001
   - M: Web /api/decode 输入校验 400、CLI JSON 输出与 Web 密码脱敏
   - L: byte_map 高亮死代码修复、byte_table SYN 偏移、SL427 to_dict 补帧长度、CLI --raw-only 死参数移除
-  - 测试: 25 → 37 项；文档一致性修正 8 处（ASCII 102 项/AFN 30 项/FUNC_MAP 23 项等）
+  - 测试: 25 → 41 项；文档一致性修正 8 处（ASCII 102 项/AFN 30 项/FUNC_MAP 23 项等）
+  - 补充: decode() 入口起始符校验、综合参数 0xAA 填充偏移、有符号 BCD 非法半字节降级、非法 BCD 时间占位显示
 
 - **v1.2.4**：审计 v2.0 修复版（3M+13L 缺陷修复）
 

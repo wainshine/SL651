@@ -791,6 +791,56 @@ def test_alert_edge_trigger() -> None:
     print("    OK")
 
 
+# ---------- v1.2.5 补充修复回归测试（R1~R5） ----------
+
+def test_sl651_decode_entry_check() -> None:
+    """v1.2.5 R2: decode(bytes) 入口校验起始符"""
+    from sl651.decoder import DecodeError
+    print(">>> SL651 decode 入口校验")
+    try:
+        SL651Decoder().decode(b"\xAA\xBB" + bytes(30))
+        raise AssertionError("垃圾起始字节未报错")
+    except DecodeError:
+        pass
+    print("    OK")
+
+
+def test_sl427_comprehensive_offset() -> None:
+    """v1.2.5 R1: 综合参数 0xAA 填充 array 型后偏移正确"""
+    from sl427.decoder import _parse_comprehensive
+    print(">>> SL427 综合参数填充偏移")
+    # bit5=流量(5B, 全AA缺测) + bit6=水位(4B)
+    flag = (1 << 5) | (1 << 6)
+    data = bytes([flag]) + bytes.fromhex("AAAAAAAAAA") + bytes.fromhex("45230001")
+    items = _parse_comprehensive(data)
+    names = [i.name for i in items]
+    assert "水位" in names, f"水位要素丢失（偏移错位）: {names}"
+    print("    OK")
+
+
+def test_sl427_signed_bcd_invalid_nibble() -> None:
+    """v1.2.5 R4: 有符号 BCD 高半字节 0xA~0xE 降级为 '-'"""
+    from sl427.decoder import _parse_signed_bcd
+    print(">>> SL427 有符号BCD非法半字节")
+    val, _raw = _parse_signed_bcd(bytes.fromhex("01B2"), 2)
+    assert val == "-", f"应为 '-'，实际 {val}"
+    # 正常负值不受影响（高半字节 0xF）
+    val, _raw = _parse_signed_bcd(bytes.fromhex("01F2"), 2)
+    assert val.startswith("-"), f"应为负值，实际 {val}"
+    print("    OK")
+
+
+def test_sl427_invalid_time_display() -> None:
+    """v1.2.5 R5: 非法 BCD 日期显示占位而非假时间"""
+    from sl427.decoder import _fmt_time_427
+    print(">>> SL427 非法时间显示")
+    r = _fmt_time_427(bytes.fromhex("0000002D132600"))  # 日=45 月=19
+    assert "无效时间" in r, f"应提示无效时间，实际 {r}"
+    r = _fmt_time_427(bytes.fromhex("00301025082600"))
+    assert "2026-08-25" in r, f"正常时间解析错误: {r}"
+    print("    OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 工具包自测")
@@ -815,6 +865,8 @@ def main() -> int:
         test_sl427_ff_tp_strip, test_web_api, test_cli_json_masking,
         test_simulator_yaml_validation, test_soil_temp_bounded,
         test_alert_edge_trigger,
+        test_sl651_decode_entry_check, test_sl427_comprehensive_offset,
+        test_sl427_signed_bcd_invalid_nibble, test_sl427_invalid_time_display,
     ]
     for test in tests:
         try:
