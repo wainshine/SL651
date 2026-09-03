@@ -578,11 +578,11 @@ def test_sl651_hex_type_ff() -> None:
     enc = SL651Encoder(station_addr="1234567890")
     body = (bytes([0xF1, 0xF1]) + enc.station_addr_bytes
             + bytes([0x4B, 0xF0, 0xF0]) + bytes.fromhex("2306010100")
-            + bytes([0xF3, (2 << 3) | 0]) + bytes([0xFF, 0x10]))
+            + bytes([0xF2, (2 << 3) | 0]) + bytes([0xFF, 0x10]))
     frame = enc.build_frame(0x32, body)
     r = SL651Decoder().decode(frame)
-    f3 = [e for e in r.elements if e.code == "F3"]
-    assert f3 and f3[0].value == 65296, f"F3 应为 65296，实际 {f3[0].value if f3 else None}"
+    f2 = [e for e in r.elements if e.code == "F2"]
+    assert f2 and f2[0].value == 65296, f"F2 应为 65296，实际 {f2[0].value if f2 else None}"
     print("    OK")
 
 
@@ -841,6 +841,63 @@ def test_sl427_invalid_time_display() -> None:
     print("    OK")
 
 
+def test_sl651_ascii_reserved_id() -> None:
+    """v1.2.6 B3: build_ascii_frame 拒绝保留引导符 ST/TT，抛 EncodeError"""
+    from sl651.encoder import EncodeError
+    print(">>> SL651 ASCII 保留标识符校验")
+    enc = SL651Encoder(center_addr=0x01, station_addr="1234567890", password=0, station_type=0x48)
+    for bad in ("ST", "TT", "st"):
+        try:
+            enc.build_ascii_frame([(bad, "1.0")])
+            raise AssertionError(f"保留标识符 {bad} 应抛 EncodeError")
+        except EncodeError:
+            pass
+    # 正常标识符不受影响
+    frame = enc.build_ascii_frame([("Z", "12.345")])
+    assert frame[:1] == b"\x01"
+    print("    OK")
+
+
+def test_sl651_f3_image_display() -> None:
+    """v1.2.6 B2: F3 图片要素显示字节摘要而非数值化天文数字"""
+    print(">>> SL651 F3 图片显示")
+    # 福建 0x36 图片报真实帧（F3 定义符 0xF3 = 30 字节 JPEG 数据）
+    hex_frame = (
+        "7E7E01100000000600003600F8160040012F7F221205161519F1F1100000000648"
+        "F0F02212051615F3F3FFD8FFE000104A46494600010101009000900000FFDB0043"
+        "00080606070605080707070909080A0C140D0C0B0B0C1912130F141D1A1F1E1D1A"
+        "1C1C20242E2720222C231C1C2837292C30313434341F27393D38323C2E333432FF"
+        "DB0043010909090C0B0C180D0D1832211C21323232323232323232323232323232"
+        "32323232323232323232323232323232323232323232323232323232323232323232"
+        "3232323232FFC00011080015001903012200021101031101FFC4001F0000010501"
+        "0101010100000000000000000102030405060708090A0BFFC400B5100002010303"
+        "17DA107E"
+    )
+    r = SL651Decoder().decode_hex(hex_frame)
+    f3 = [e for e in r.elements if e.code == "F3"]
+    assert f3, "应解析出 F3 图片要素"
+    v = str(f3[0].value)
+    assert "图片数据" in v and "30 字节" in v, f"F3 应显示字节摘要: {v}"
+    assert "e+" not in v.lower(), f"F3 不应数值化: {v}"
+    print("    OK")
+
+
+def test_sl427_invalid_nibble_time() -> None:
+    """v1.2.6 B1: 非法 BCD 半字节（落入合法范围的假时间）显示占位"""
+    from sl427.decoder import _fmt_time_427
+    print(">>> SL427 非法半字节时间显示")
+    # 秒=0x5A：or 0 静默归零后落入合法范围，旧版显示 "14:15:00" 假时间
+    r = _fmt_time_427(bytes.fromhex("5A151412052600"))
+    assert "无效时间" in r, f"非法半字节应提示无效时间，实际 {r}"
+    # 月=0x1A（非法半字节）
+    r = _fmt_time_427(bytes.fromhex("003010251A2600"))
+    assert "无效时间" in r, f"非法半字节应提示无效时间，实际 {r}"
+    # 合法的 0 值字段不受影响（秒=0x00 合法）
+    r = _fmt_time_427(bytes.fromhex("00151412052600"))
+    assert "2026-05-12 14:15:00" in r, f"合法 0 秒解析错误: {r}"
+    print("    OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 工具包自测")
@@ -867,6 +924,8 @@ def main() -> int:
         test_alert_edge_trigger,
         test_sl651_decode_entry_check, test_sl427_comprehensive_offset,
         test_sl427_signed_bcd_invalid_nibble, test_sl427_invalid_time_display,
+        test_sl427_invalid_nibble_time, test_sl651_f3_image_display,
+        test_sl651_ascii_reserved_id,
     ]
     for test in tests:
         try:

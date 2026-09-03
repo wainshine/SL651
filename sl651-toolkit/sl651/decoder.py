@@ -555,11 +555,23 @@ class SL651Decoder:
             elif dt == "F5_ARRAY":
                 elements.extend(self._parse_f5_array(raw_hex, f_len, code))
             elif dt == "Hex":
-                pv = _safe_hex_val(raw_hex, f_dec, is_neg)
-                elements.append(ElementValue(
-                    code=code.upper(), name=desc, value=pv[0], unit=unit,
-                    raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
-                ))
+                if code == "f3":
+                    # 图片二进制不做数值化，显示字节数 + hex 预览
+                    preview = raw_hex[:32].upper()
+                    if len(raw_hex) > 32:
+                        preview += "..."
+                    elements.append(ElementValue(
+                        code=code.upper(), name=desc,
+                        value=f"<图片数据 {f_len} 字节: {preview}>", unit="",
+                        raw=raw_hex.upper(), data_type="Hex", byte_len=f_len,
+                        decimal=f_dec, is_sub=is_cust,
+                    ))
+                else:
+                    pv = _safe_hex_val(raw_hex, f_dec, is_neg)
+                    elements.append(ElementValue(
+                        code=code.upper(), name=desc, value=pv[0], unit=unit,
+                        raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
+                    ))
             else:
                 pv = _safe_bcd_val(raw_hex, f_dec, is_neg)
                 elements.append(ElementValue(

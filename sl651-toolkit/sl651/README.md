@@ -70,7 +70,7 @@ enc = SL651Encoder(
 
 | 方法 | 功能码 | 说明 |
 |------|--------|------|
-| `build_timing_frame(elements, obs_time, func=0x32)` | 0x32 | 定时报 |
+| `build_timing_frame(elements, obs_time, function_code=0x32)` | 0x32 | 定时报 |
 | `build_alarm_frame(elements, obs_time)` | 0x33 | 加报报 |
 | `build_hourly_frame(water_levels, inst_level, voltage, obs_time)` | 0x34 | 小时报（含 12×F5 数组） |
 | `build_link_maintain_frame()` | 0x2F | 链路维持 |

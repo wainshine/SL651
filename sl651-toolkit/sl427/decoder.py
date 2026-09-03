@@ -267,12 +267,10 @@ def _parse_terminal(data: bytes) -> list[ElementValue]:
 def _fmt_time_427(data: bytes) -> str:
     """Tp 时间标签（6.3.3.8）：前6B BCD(秒分时日月年) + 第7B BIN允许传输延时时长(min)。"""
 
-    sec = safe_bcd_to_int(data[0]) or 0
-    min_val = safe_bcd_to_int(data[1]) or 0
-    hour = safe_bcd_to_int(data[2]) or 0
-    day = safe_bcd_to_int(data[3]) or 0
-    month = safe_bcd_to_int(data[4]) or 0
-    year = safe_bcd_to_int(data[5]) or 0
+    fields = [safe_bcd_to_int(data[i]) for i in range(6)]
+    if any(f is None for f in fields):
+        return f"无效时间({bytes_to_hex_compact(data[:6])})"
+    sec, min_val, hour, day, month, year = fields
     delay = data[6] if len(data) > 6 else 0
     if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 23
             and min_val <= 59 and sec <= 59):

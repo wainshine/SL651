@@ -1,7 +1,7 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.2.5  
-> 最后更新：2026-08-26  
+> 版本：v1.2.6  
+> 最后更新：2026-09-03  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
 ---
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 41 项 + test_round1_blindspots.py, 10 项）
+├── tests/          测试脚本（test_sl651.py, 44 项 + test_round1_blindspots.py, 10 项）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -327,8 +327,11 @@ python web/app.py
 | `test_sl427_comprehensive_offset` | SL427 | 综合参数 0xAA 填充后偏移正确 |
 | `test_sl427_signed_bcd_invalid_nibble` | SL427 | 有符号 BCD 非法半字节降级 `-` |
 | `test_sl427_invalid_time_display` | SL427 | 非法 BCD 日期占位显示 |
+| `test_sl427_invalid_nibble_time` | SL427 | 非法 BCD 半字节时间占位显示（v1.2.6 B1） |
+| `test_sl651_f3_image_display` | SL651 | F3 图片要素字节摘要显示，不数值化（v1.2.6 B2） |
+| `test_sl651_ascii_reserved_id` | SL651 | ASCII 编码器拒绝保留引导符 ST/TT（v1.2.6 B3） |
 
-**总计: 41 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
+**总计: 44 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 

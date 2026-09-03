@@ -369,6 +369,10 @@ class SL651Encoder:
         parts.append("TT")
         parts.append(obs_time.strftime("%y%m%d%H%M"))
         for code, val in elements:
+            if code.upper() in ("ST", "TT"):
+                raise EncodeError(
+                    f"ASCⅡ 标识符 {code!r} 为帧结构保留引导符，不能用作要素标识符"
+                )
             parts.append(code)
             parts.append(val)
         parts.append("")

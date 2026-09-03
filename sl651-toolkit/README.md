@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.5
+# SL651 水文规约工具包 v1.2.6
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -45,7 +45,7 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── test_sl651.py           # 41 项自测
+│   ├── test_sl651.py           # 44 项自测
 │   └── test_round1_blindspots.py  # 10 项盲区测试
 ├── docs/
 │   └── project.md              # 项目规格说明书
@@ -215,12 +215,19 @@ python web/app.py
 ```bash
 python tests/test_sl651.py
 
-# 25 项测试全部通过（含 23 条福建 + 25 条北京真实报文 CRC 验证）
+# 44 项测试全部通过（另含 10 项盲区测试；23 条福建 + 25 条北京真实报文 CRC 验证）
 ```
 
 ---
 
 ## 五、版本历史
+
+- **v1.2.6**：主会话 4 代自审计修复版（文档一致性修正 + 3 项缺陷修复）
+  - 文档：根 README/toolkit README/handoff_test 测试计数滞后修正（24/25 → 44 项）、handoff_main 行号漂移 2 处、sl651 README 参数名 `func` → `function_code`
+  - B1: SL427 `_fmt_time_427` 非法 BCD 半字节被 `or 0` 静默归零产生假时间 → 统一显示"无效时间(...)"占位
+  - B2: SL651 F3 图片要素不再数值化（原显示天文数字），改为字节数 + hex 预览
+  - B3: `build_ascii_frame`/`build_ascii_body` 拒绝保留引导符 ST/TT，抛 EncodeError
+  - 测试: 41 → 44 项（test_sl427_invalid_nibble_time / test_sl651_f3_image_display / test_sl651_ascii_reserved_id）
 
 - **v1.2.5**：审计 v2.1 修复版（4H+12M+20L 缺陷修复）+ Web 界面重写（亮色监控台风格）
   - H: SL651 截断上行帧 IndexError、SL427 非法 BCD ValueError 泄漏、SL427 最小 L 校验、TcpSender 多线程加锁

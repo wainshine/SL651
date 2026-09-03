@@ -13,7 +13,7 @@ SL651/
 │   ├── tools/              # CLI 工具
 │   ├── web/                # Web 解码界面
 │   ├── docs/               # 需求文档 + 交接文档
-│   ├── tests/              # 24 项自测
+│   ├── tests/              # 41 项自测（+10 项盲区测试）
 │   └── README.md           # 工具包详细文档
 ├── 行业规范/               # PDF 规范文件（gitignore，不入库）
 └── .gitignore
@@ -28,7 +28,7 @@ pip install -r requirements.txt
 # 解码一条报文
 python tools/decode_cli.py sl651 --hex "7E7E..."
 
-# 跑全部测试（24 项）
+# 跑全部测试（41 项）
 python tests/test_sl651.py
 ```
 

@@ -12,7 +12,7 @@
 ### 1.1 一次性运行结果
 
 ```
-24/24 项测试全部通过
+44/44 项测试全部通过
 福建 23 条真实报文 CRC 全通过
 北京 25 条真实报文 CRC 全通过
 ```
@@ -74,7 +74,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 ## 三、测试用例清单
 
-### 3.1 `tests/test_sl651.py` 24 项全览
+### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 44 项清单见 `docs/project.md` §7.1）
 
 | 序号 | 测试函数 | 协议 | 覆盖点 | 类型 |
 |------|----------|------|--------|------|
@@ -193,7 +193,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 | 条件 | 预期 | 验证方式 |
 |------|------|----------|
-| 24 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
+| 44 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
 | 福建 23 条 | CRC 100% | `python3 tools/decode_cli.py sl651 --file examples/fujian_messages.txt` |
 | 北京 25 条 | CRC 100% | `python3 tools/decode_cli.py sl651 --file examples/beijing_messages.txt` |
 | CRC16 验证向量 | `crc16(b"123456789") == 0x4B37` | test_crc |
