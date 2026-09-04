@@ -613,6 +613,19 @@ def test_sl651_encoder_validation() -> None:
         raise AssertionError("center_addr 越界未报错")
     except EncodeError:
         pass
+    # v1.2.6 N3: obs_time/tx_time 非 datetime 应抛 EncodeError（非 AttributeError）
+    for bad_call in (
+        lambda: enc.build_timing_frame([(0x39, 7.0, 4, 3)], obs_time="2026-09-03"),
+        lambda: enc.build_alarm_frame([(0x39, 7.0, 4, 3)], obs_time="x"),
+        lambda: enc.build_hourly_frame([7.0] * 12, 7.0, 12.6, obs_time=123),
+        lambda: enc.build_ascii_frame([("Z", "1.0")], obs_time="x"),
+        lambda: enc.build_clock_sync_frame("2026-09-03 12:00"),
+    ):
+        try:
+            bad_call()
+            raise AssertionError("非法时间参数未报错")
+        except EncodeError:
+            pass
     print("    OK")
 
 

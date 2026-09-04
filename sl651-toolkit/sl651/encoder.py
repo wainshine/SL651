@@ -24,6 +24,12 @@ def _make_def_byte(data_len: int, decimals: int = 0) -> int:
     return ((data_len & 0x1F) << 3) | (decimals & 0x07)
 
 
+def _check_datetime(value: datetime, name: str) -> None:
+    """时间参数类型校验，非 datetime 抛 EncodeError。"""
+    if not isinstance(value, datetime):
+        raise EncodeError(f"{name} 必须为 datetime，实际 {type(value).__name__}")
+
+
 def _encode_bcd(value: float, data_len: int, decimals: int) -> bytes:
     """浮点数 -> BCD 编码字节。负数按 SL651 6.6.3.3 用 0xFF 前缀。"""
     negative = value < 0
@@ -90,6 +96,7 @@ class SL651Encoder:
 
         is_downlink = direction == C.DIR_DOWNLINK
         if tx_time is not None:
+            _check_datetime(tx_time, "tx_time")
             actual_tx_time = datetime_to_bcd(tx_time)
         else:
             actual_tx_time = datetime_to_bcd(datetime.now())
@@ -145,6 +152,7 @@ class SL651Encoder:
         """
         if obs_time is None:
             obs_time = datetime.now()
+        _check_datetime(obs_time, "obs_time")
         ot = datetime_to_bcd(obs_time)[:5]
 
         body = bytearray()
@@ -187,6 +195,7 @@ class SL651Encoder:
         """构造上行加报报正文。trigger 为触发要素(引导符,值,字节数,小数位)，放在正文首部（表34）。"""
         if obs_time is None:
             obs_time = datetime.now()
+        _check_datetime(obs_time, "obs_time")
         ot = datetime_to_bcd(obs_time)[:5]
 
         body = bytearray()
@@ -236,6 +245,7 @@ class SL651Encoder:
             raise EncodeError(f"小时报雨量要求恰好 12 组，当前 {len(rain_amounts)} 组")
         if obs_time is None:
             obs_time = datetime.now()
+        _check_datetime(obs_time, "obs_time")
         ot = datetime_to_bcd(obs_time)[:5]
 
         body = bytearray()
@@ -361,6 +371,7 @@ class SL651Encoder:
         """
         if obs_time is None:
             obs_time = datetime.now()
+        _check_datetime(obs_time, "obs_time")
 
         parts = []
         parts.append("ST")

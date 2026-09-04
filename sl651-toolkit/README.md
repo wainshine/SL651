@@ -147,9 +147,11 @@ for e in r.elements:
 | `build_link_maintain_frame()` | 0x2F | 上行 | ETX | 链路维持 |
 | `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ASCII 编码（SOH 起始） |
 | `build_query_frame()` | 0x37 | 下行 | ENQ | 查询所有实时数据 |
+| `build_query_body(guides)` | 0x3A | 下行 | ENQ | 查询指定要素（正文含引导符） |
 | `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | 参数设置 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | 恢复出厂 |
+| `build_frame(func, body, ...)` | 任意 | 任意 | 可指定 | 通用帧构造 |
 
 ### 2.2 SL427 编码
 
@@ -227,6 +229,8 @@ python tests/test_sl651.py
   - B1: SL427 `_fmt_time_427` 非法 BCD 半字节被 `or 0` 静默归零产生假时间 → 统一显示"无效时间(...)"占位
   - B2: SL651 F3 图片要素不再数值化（原显示天文数字），改为字节数 + hex 预览
   - B3: `build_ascii_frame`/`build_ascii_body` 拒绝保留引导符 ST/TT，抛 EncodeError
+  - N3: 编码器 obs_time/tx_time 参数类型校验统一抛 EncodeError（原误传 str 泄漏 AttributeError）
+  - 文档补充: README §2.1 编码器表补 build_query_body/build_frame 两行；handoff_audit/handoff_test 基线版本同步
   - 测试: 41 → 44 项（test_sl427_invalid_nibble_time / test_sl651_f3_image_display / test_sl651_ascii_reserved_id）
 
 - **v1.2.5**：审计 v2.1 修复版（4H+12M+20L 缺陷修复）+ Web 界面重写（亮色监控台风格）
