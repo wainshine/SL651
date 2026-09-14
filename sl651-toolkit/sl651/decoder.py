@@ -978,6 +978,11 @@ class SL651Decoder:
     @staticmethod
     def _parse_status(raw_hex: str, f_len: int) -> list[ElementValue]:
         """解析 45H 状态报警。注：当前缩减为 12 位，规范表58 为 4B/32 位。"""
+        c = raw_hex.upper()
+        if c and (all(ch == "F" for ch in c) or all(ch == "A" for ch in c)):
+            # 全 0xFF / 0xAA 缺测填充：不展开位图，降级为单个 '-' 要素
+            return [ElementValue(code="45", name="状态报警", value="-", unit="",
+                                 raw=c, data_type="STATUS", byte_len=f_len)]
         try:
             sv = int(raw_hex, 16)
         except ValueError:

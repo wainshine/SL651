@@ -46,7 +46,7 @@ sl651-toolkit/
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
 │   ├── run_all.py              # 统一测试入口（8 套件）
-│   ├── test_sl651.py           # 主测试 60 项
+│   ├── test_sl651.py           # 主测试 61 项
 │   ├── test_round1_blindspots.py    # 盲区测试 10 项
 │   ├── test_simulator_integration.py # 模拟器端到端集成
 │   ├── test_fuzz_decoders.py   # 解码器变异/流式健壮性
@@ -250,11 +250,11 @@ python web/app.py
 python tests/run_all.py
 
 # 或单独运行
-python tests/test_sl651.py            # 60 项主测试
+python tests/test_sl651.py            # 61 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 8 套件：主套件 60 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 6 组
+- `run_all.py` 共 8 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 6 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
@@ -263,14 +263,15 @@ python tests/test_round1_blindspots.py  # 10 项盲区测试
 ## 五、版本历史
 
 - **v1.3.2**：审计 v2.4 修复版（2M+5L）
-  - M-1: SL427 缺测填充处理补全至状态/事件/水泵/中继/水质等全分支，`0xAA`/`0xFF` 统一降级 `-`（原按位图/计数输出误导值）
+  - M-1: SL427 缺测填充处理补全至**全部分支**——查询响应（状态/事件/水泵/中继/水质/种类/时钟）、控制/配置响应（90/91/92/93/94/95/A0/A1）、AFN=51 时钟，`0xAA`/`0xFF` 统一降级 `-`（原按位图/计数输出误导值）
+  - M-1b: SL651 45H 状态位全 `0xFF`/`0xAA` 填充不再展开位图，降级 `-`
   - M-2: SL427 AFN=84 自报电压帧遇填充改用 `_safe_bcd_le`，降级 `-` 并写 `warnings`（原抛 `DecodeError`）
   - L-1: README 辅助套件计数同步为实测 13/21/10/6
   - L-2: 北京水务报文测站数更正为 10（文档/示例注释）
   - L-3: `_safe_bcd_le` 仅容忍规约合法填充；非填充非法 BCD 仍抛 `DecodeError`，保持畸形拒绝契约
   - L-4: 变异测试新增「合法帧/合法填充不得抛异常、不得产生错误值」正向断言
   - L-5: `project.md §2.2` 功能码表补齐 0x36/0x38/0x39/0x3A/0x4B~0x4F
-  - 测试: 主套件 59 → 60 项（缺测填充全分支语义）；变异套件 3 → 4 组（合法帧正向）
+  - 测试: 主套件 59 → 61 项（缺测填充全分支语义 + SL651 45H 填充）；变异套件 3 → 4 组（合法帧正向）
 
 - **v1.3.1**：审计 v2.3 修复版（4M+6L）
   - M-1: `FUNC_MAP` 0x38~0x51 功能码名称按规约正文重写，补齐 0x39/0x44/0x4B~0x4F（原 0x44 显示「未知」、0x45~0x51 名称错误）

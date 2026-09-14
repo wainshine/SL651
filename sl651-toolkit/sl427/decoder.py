@@ -632,29 +632,40 @@ def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
 
     if afn_hex == "90":
         if data:
-            txt = "执行完毕" if data[0] == 0x5A else f"0x{data[0]:02X}"
+            txt = "-" if data[0] in (0xAA, 0xFF) else (
+                "执行完毕" if data[0] == 0x5A else f"0x{data[0]:02X}")
             out.append(ElementValue(name="复位响应", value=txt, unit="", raw=raw,
                                     editable=False))
     elif afn_hex == "91":
         if data:
-            names = [n for bit, n in ((0, "雨量"), (1, "水位"), (2, "水量"))
-                     if (data[0] >> bit) & 1]
-            out.append(ElementValue(name="清空历史数据", value="、".join(names) or "无",
+            if data[0] in (0xAA, 0xFF):
+                val = "-"
+            else:
+                names = [n for bit, n in ((0, "雨量"), (1, "水位"), (2, "水量"))
+                         if (data[0] >> bit) & 1]
+                val = "、".join(names) or "无"
+            out.append(ElementValue(name="清空历史数据", value=val,
                                     unit="", raw=raw, editable=False))
     elif afn_hex in ("92", "93"):
         if data:
-            code = data[0] & 0x0F
-            is_valve = ((data[0] >> 4) & 0x0F) == 0x0F
-            done = ((data[0] >> 4) & 0x0F) == 0x0A
-            kind = "阀门/闸门" if is_valve else "水泵"
             act = "启动" if afn_hex == "92" else "关闭"
-            txt = f"{kind}编号{code}" + (" 执行完毕" if done else "")
+            if data[0] in (0xAA, 0xFF):
+                txt = "-"
+            else:
+                code = data[0] & 0x0F
+                is_valve = ((data[0] >> 4) & 0x0F) == 0x0F
+                done = ((data[0] >> 4) & 0x0F) == 0x0A
+                kind = "阀门/闸门" if is_valve else "水泵"
+                txt = f"{kind}编号{code}" + (" 执行完毕" if done else "")
             out.append(ElementValue(name=f"{act}响应", value=txt, unit="", raw=raw,
                                     editable=False))
     elif afn_hex in ("94", "95"):
         if data:
-            low = data[0] & 0x0F
-            m = "A机" if low == 0x09 else ("B机" if low == 0x06 else f"0x{low:02X}")
+            if data[0] in (0xAA, 0xFF):
+                m = "-"
+            else:
+                low = data[0] & 0x0F
+                m = "A机" if low == 0x09 else ("B机" if low == 0x06 else f"0x{low:02X}")
             out.append(ElementValue(name="切换响应", value=m, unit="", raw=raw,
                                     editable=False))
     elif afn_hex == "96":
@@ -665,18 +676,26 @@ def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     unit="", raw=raw, editable=False))
     elif afn_hex == "a0":
         if len(data) >= 2:
-            mask = data[0] | (data[1] << 8)
-            names = [C.RT_KINDS_QUERY[i] for i in range(16) if (mask >> i) & 1]
-            out.append(ElementValue(name="需查询的实时数据种类",
-                                    value="、".join(names) or "无",
-                                    unit="", raw=raw, editable=False))
+            if _is_fill(data[:2]):
+                out.append(ElementValue(name="需查询的实时数据种类", value="-",
+                                        unit="", raw=raw, editable=False))
+            else:
+                mask = data[0] | (data[1] << 8)
+                names = [C.RT_KINDS_QUERY[i] for i in range(16) if (mask >> i) & 1]
+                out.append(ElementValue(name="需查询的实时数据种类",
+                                        value="、".join(names) or "无",
+                                        unit="", raw=raw, editable=False))
     elif afn_hex == "a1":
         if len(data) >= 2:
-            mask = data[0] | (data[1] << 8)
-            names = [C.RT_KINDS_REPORT[i] for i in range(16) if (mask >> i) & 1]
-            out.append(ElementValue(name="数据自报种类",
-                                    value="、".join(names) or "无",
-                                    unit="", raw=raw, editable=False))
+            if _is_fill(data[:2]):
+                out.append(ElementValue(name="数据自报种类", value="-",
+                                        unit="", raw=raw, editable=False))
+            else:
+                mask = data[0] | (data[1] << 8)
+                names = [C.RT_KINDS_REPORT[i] for i in range(16) if (mask >> i) & 1]
+                out.append(ElementValue(name="数据自报种类",
+                                        value="、".join(names) or "无",
+                                        unit="", raw=raw, editable=False))
             for i in range((len(data) - 2) // 2):
                 iv = _safe_bcd_le(data[2 + i * 2:4 + i * 2])
                 label = C.RT_KINDS_REPORT[i] if i < len(C.RT_KINDS_REPORT) else f"#{i}"
@@ -692,6 +711,8 @@ def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
 def _fmt_time_427(data: bytes) -> str:
     """Tp 时间标签（6.3.3.8）：前6B BCD(秒分时日月年) + 第7B BIN允许传输延时时长(min)。"""
 
+    if _is_fill(data[:6]):
+        return "-"
     fields = [safe_bcd_to_int(data[i]) for i in range(6)]
     if any(f is None for f in fields):
         return f"无效时间({bytes_to_hex_compact(data[:6])})"

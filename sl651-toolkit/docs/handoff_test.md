@@ -13,7 +13,7 @@
 
 ```
 python tests/run_all.py → 8/8 套件通过
-  主套件 60 项 / 盲区 10 项 / 模拟器集成 5 组 / 变异 4 组
+  主套件 61 项 / 盲区 10 项 / 模拟器集成 5 组 / 变异 4 组
   / SL427 参数 13 组 / 查询 21 组 / 控制 10 组 / SL651 多包 6 组
 福建 23 条真实报文 CRC + 要素级基线全通过
 北京 25 条真实报文 CRC + 要素级基线全通过
@@ -77,7 +77,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 ## 三、测试用例清单
 
-### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 60 项清单见 `docs/project.md` §7.1）
+### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 61 项清单见 `docs/project.md` §7.1）
 
 | 序号 | 测试函数 | 协议 | 覆盖点 | 类型 |
 |------|----------|------|--------|------|
@@ -196,7 +196,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 | 条件 | 预期 | 验证方式 |
 |------|------|----------|
-| 60 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
+| 61 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
 | 福建 23 条 | CRC 100% + 要素级基线 | `python3 tools/decode_cli.py sl651 --file examples/fujian_messages.txt` |
 | 北京 25 条 | CRC 100% + 要素级基线 | `python3 tools/decode_cli.py sl651 --file examples/beijing_messages.txt` |
 | CRC16 验证向量 | `crc16(b"123456789") == 0x4B37` | test_crc |

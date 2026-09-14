@@ -158,10 +158,14 @@ def test_legal_frames_no_raise() -> None:
         dec427.decode(f)
 
     enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
-    fill_afns = [0x50, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
-                 0x5A, 0x5D, 0x5E, 0x5F, 0x60, 0x62, 0x63, 0x64, 0x84, 0x96]
-    for afn in fill_afns:
-        n = 2 if afn in (0x52, 0x60, 0x84, 0x96) else (4 if afn in (0x53, 0x54, 0x5E, 0x5D) else 9)
+    fill_cases = {
+        0x50: 5, 0x51: 6, 0x52: 2, 0x53: 4, 0x54: 2, 0x55: 9, 0x56: 8,
+        0x57: 11, 0x58: 12, 0x59: 13, 0x5A: 13, 0x5D: 4, 0x5E: 4,
+        0x5F: 12, 0x60: 1, 0x62: 5, 0x63: 7, 0x64: 9, 0x84: 2, 0x96: 2,
+        0x90: 1, 0x91: 1, 0x92: 1, 0x93: 1, 0x94: 1, 0x95: 1,
+        0xA0: 2, 0xA1: 4,
+    }
+    for afn, n in fill_cases.items():
         frame = enc.build_frame(afn, make_ctrl(dir_=1, func_code=0), b"\xAA" * n)
         r = dec427.decode(frame)  # 合法填充不得抛异常
         vals = [e.value for e in r.elements]
@@ -169,7 +173,7 @@ def test_legal_frames_no_raise() -> None:
         assert all(v == "-" for v in vals), \
             f"AFN 0x{afn:02X} 填充应降级为 '-', 实际 {vals[:4]}"
     print(f"    {len(_base_sl651_frames())} SL651 + {len(_base_sl427_frames())} SL427 合法帧 + "
-          f"{len(fill_afns)} 个填充响应 OK")
+          f"{len(fill_cases)} 个填充响应 OK")
 
 
 def main() -> int:

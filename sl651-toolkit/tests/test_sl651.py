@@ -1311,8 +1311,10 @@ def test_sl427_fill_semantics() -> None:
     print(">>> SL427 缺测填充全分支语义")
     from sl427 import SL427Encoder, SL427Decoder, encode_address, make_ctrl
     enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
-    cases = {0x5D: 4, 0x5E: 4, 0x5F: 12, 0x60: 1, 0x63: 7,
-             0x57: 11, 0x58: 12, 0x59: 13, 0x84: 2}
+    cases = {0x51: 6, 0x5D: 4, 0x5E: 4, 0x5F: 12, 0x60: 1, 0x63: 7,
+             0x57: 11, 0x58: 12, 0x59: 13, 0x84: 2,
+             0x90: 1, 0x91: 1, 0x92: 1, 0x93: 1, 0x94: 1, 0x95: 1,
+             0xA0: 2, 0xA1: 4}
     for afn, n in cases.items():
         frame = enc.build_frame(afn, make_ctrl(dir_=1, func_code=0), b"\xAA" * n)
         r = SL427Decoder().decode(frame)
@@ -1321,6 +1323,20 @@ def test_sl427_fill_semantics() -> None:
         bad = [(e.name, e.value) for e in r.elements if e.value != "-"]
         assert not bad, f"0x{afn:02X} 填充应全为 '-', 异常项: {bad[:3]}"
     print(f"    {len(cases)} 个 AFN 填充全分支降级 OK")
+
+
+def test_sl651_status_fill() -> None:
+    """SL651 45H 状态位全 0xFF/0xAA 填充降级为 '-'（审计 v2.4 M-1 同类）"""
+    print(">>> SL651 45H 状态位填充")
+    enc = SL651Encoder(station_addr="1234567890")
+    for raw in (b"\xFF\xFF\xFF\xFF", b"\xAA\xAA\xAA\xAA"):
+        body = (bytes([0xF1, 0xF1]) + enc.station_addr_bytes
+                + bytes([0x4B, 0xF0, 0xF0]) + bytes.fromhex("2306010100")
+                + bytes([0x45, (4 << 3) | 0]) + raw)
+        r = SL651Decoder().decode(enc.build_frame(0x32, body))
+        assert len(r.elements) == 1 and r.elements[0].code == "45", r.elements
+        assert r.elements[0].value == "-", r.elements[0].value
+    print("    45H 全 FF / 全 AA 均降级 '-' OK")
 
 
 def main() -> int:
@@ -1359,7 +1375,7 @@ def main() -> int:
         test_sl651_downlink_queries, test_sl651_config_and_manual_frames,
         test_sl651_init_storage_and_password,
         test_sl651_func_name_consistency, test_sl651_manual_frame_fujian,
-        test_sl427_fill_semantics,
+        test_sl427_fill_semantics, test_sl651_status_fill,
     ]
     for test in tests:
         try:

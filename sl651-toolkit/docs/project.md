@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 60 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
+├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 61 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -417,9 +417,10 @@ python web/app.py
 | `test_sl651_init_storage_and_password` | SL651 | 47H 初始化固态存储（97H 标识符）/ 49H 修改密码（03H 标识符） |
 | `test_sl651_func_name_consistency` | SL651 | FUNC_MAP 功能码名称与规约/编码器一致（v1.3.1 M-1） |
 | `test_sl651_manual_frame_fujian` | SL651 | 真实福建 0x35 人工置数报 F2 载荷解析（v1.3.1 M-3） |
-| `test_sl427_fill_semantics` | SL427 | 0xAA/0xFF 缺测填充全分支降级 `-` + AFN=84 填充不拒帧（v1.3.2 M-1/M-2） |
+| `test_sl427_fill_semantics` | SL427 | 0xAA/0xFF 缺测填充全分支降级 `-`（查询/控制/配置/AFN84）（v1.3.2 M-1/M-2） |
+| `test_sl651_status_fill` | SL651 | 45H 状态位全 `0xFF`/`0xAA` 填充降级 `-`（v1.3.2 M-1 同类） |
 
-**总计: 60 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
+**总计: 61 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
 
 ### 7.4 辅助测试套件
 
@@ -524,8 +525,8 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 
 | 任务 | 说明 |
 |------|------|
-| 审计 v2.4 修复 | M-1 缺测填充全分支 / M-2 AFN=84 填充 / L-1~L-5 文档与测试 |
-| 测试增强 | 主套件 59 → 60 项（填充全分支语义）；变异套件补合法帧正向断言 |
+| 审计 v2.4 修复 | M-1 缺测填充全分支（查询/控制/配置/AFN51 + SL651 45H）/ M-2 AFN=84 填充 / L-1~L-5 文档与测试 |
+| 测试增强 | 主套件 59 → 61 项（填充全分支语义 + SL651 45H）；变异套件补合法帧正向断言 |
 
 ### ✅ 已完成（v1.3.1）
 
