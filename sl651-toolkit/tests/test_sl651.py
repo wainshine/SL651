@@ -349,7 +349,7 @@ FUJIAN_BASELINE = [
     (0x32, 4, "20", 0.0, "38", 13.12),
     (0x33, 4, "39", 28.96, "38", 13.17),
     (0x34, 28, "F4", "0.0", "38", 13.16),
-    (0x35, 0, None, None, None, None),
+    (0x35, 1, "F2", None, "F2", None),
     (0x36, 2, "F3", None, "05", 7),
     (0x37, 4, "20", 0.0, "38", 11.43),
     (0x38, 13, "04", 0, "F4", "-"),
@@ -644,17 +644,25 @@ def test_tcp_sender_threadsafe() -> None:
 
 
 def test_sl651_hex_type_ff() -> None:
-    """v1.2.5 M-3: Hex 型要素首字节 0xFF 不误判负数前缀"""
+    """v1.2.5 M-3 / v2.3 M-3: Hex 型要素首字节 0xFF 不误判负数前缀。
+
+    F2 为人工置数标识符（无定义符，见 0x35 契约），故此处用 F3 图片型
+    （唯一另一 Hex 型）验证 Hex 语义，并直接校验 `_safe_hex_val`。
+    """
     from sl651 import SL651Encoder
+    from sl651.decoder import _safe_hex_val
     print(">>> SL651 Hex型 0xFF 数据")
+    assert _safe_hex_val("FF10", 0, False) == (65296, "FF10")
+    assert _safe_hex_val("FF10", 0, True) == (-0x10, "FF10")  # 显式负数才取负
     enc = SL651Encoder(station_addr="1234567890")
     body = (bytes([0xF1, 0xF1]) + enc.station_addr_bytes
             + bytes([0x4B, 0xF0, 0xF0]) + bytes.fromhex("2306010100")
-            + bytes([0xF2, (2 << 3) | 0]) + bytes([0xFF, 0x10]))
+            + bytes([0xF3, (2 << 3) | 0]) + bytes([0xFF, 0x10]))
     frame = enc.build_frame(0x32, body)
     r = SL651Decoder().decode(frame)
-    f2 = [e for e in r.elements if e.code == "F2"]
-    assert f2 and f2[0].value == 65296, f"F2 应为 65296，实际 {f2[0].value if f2 else None}"
+    f3 = [e for e in r.elements if e.code == "F3"]
+    assert f3 and "FF10" in f3[0].raw, f"F3 raw 应保留 FF10: {f3}"
+    assert not isinstance(f3[0].value, (int, float)), f3[0].value
     print("    OK")
 
 
@@ -1167,10 +1175,13 @@ def test_sl651_config_and_manual_frames() -> None:
     r43 = SL651Decoder().decode(f43)
     assert r43.crc_ok and r43.function_code == 0x43
 
-    # 0x35 人工置数报（上行，F2 标识符 + 原编码数据）
+    # 0x35 人工置数报（上行，F2 标识符 + 原编码数据，规约表38）
     f35 = enc.build_manual_frame(bytes.fromhex("0102030405"))
     r35 = SL651Decoder().decode(f35)
     assert r35.crc_ok and r35.function_code == 0x35 and r35.direction == 0
+    assert len(r35.elements) == 1 and r35.elements[0].code == "F2", \
+        f"人工置数载荷应解出 1 个 F2 要素: {r35.elements}"
+    assert "0102030405" in r35.elements[0].raw, r35.elements[0].raw
     try:
         enc.build_manual_frame(b"")
         raise AssertionError("空人工置数应抛 EncodeError")
@@ -1247,6 +1258,54 @@ def test_sl651_ascii_uniform() -> None:
     print(f"    时间步长+{len(wl)} 组水位 OK")
 
 
+def test_sl651_func_name_consistency() -> None:
+    """FUNC_MAP 功能码名称与规约/编码器一致（审计 v2.3 M-1）"""
+    print(">>> SL651 功能码名称一致性")
+    from sl651 import constants as C
+    expected = {
+        0x37: "查询实时数据", 0x38: "查询时段数据", 0x39: "查询人工置数",
+        0x3A: "查询指定要素", 0x40: "修改基本配置", 0x41: "读取基本配置",
+        0x42: "修改运行参数配置表", 0x43: "读取运行参数配置表",
+        0x44: "查询水泵电机数据", 0x45: "查询软件版本", 0x46: "查询状态及报警",
+        0x47: "初始化固态存储", 0x48: "恢复出厂设置", 0x49: "修改密码",
+        0x4A: "设置时钟", 0x4B: "设置IC卡状态", 0x4C: "控制水泵",
+        0x4D: "控制阀门", 0x4E: "控制闸门", 0x4F: "水量定值控制",
+        0x50: "查询事件记录", 0x51: "查询时钟",
+    }
+    for fc, name in expected.items():
+        assert C.FUNC_MAP.get(fc) == name, \
+            f"0x{fc:02X} 名称应为 {name}, 实际 {C.FUNC_MAP.get(fc)}"
+
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890", station_type=0x48)
+    builders = [
+        (enc.build_query_frame, 0x37),
+        (enc.build_query_pump_data, 0x44),
+        (enc.build_query_software_version, 0x45),
+        (enc.build_query_status_alarm, 0x46),
+        (enc.build_init_solid_storage, 0x47),
+        (enc.build_query_event_record, 0x50),
+        (enc.build_query_clock, 0x51),
+    ]
+    for builder, fc in builders:
+        r = SL651Decoder().decode(builder())
+        assert r.function_name == expected[fc], \
+            f"0x{fc:02X} 解码名称={r.function_name}, 期望 {expected[fc]}"
+        assert "未知" not in r.function_name
+    print(f"    {len(expected)} 个功能码名称 + {len(builders)} 条编解码一致 OK")
+
+
+def test_sl651_manual_frame_fujian() -> None:
+    """真实福建 0x35 人工置数报解出 F2 载荷（审计 v2.3 M-3）"""
+    print(">>> SL651 0x35 人工置数报 F2 契约")
+    frame = bytes.fromhex(
+        "7E7E0110000000060000350011022F7D221205102729F2F25120312E32333403BF56")
+    r = SL651Decoder().decode(frame)
+    assert r.crc_ok and r.function_code == 0x35, f"crc={r.crc_ok}"
+    assert len(r.elements) == 1 and r.elements[0].code == "F2", r.elements
+    assert r.elements[0].raw == "F25120312E323334", r.elements[0].raw
+    print("    福建 0x35 F2 载荷 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 工具包自测")
@@ -1282,6 +1341,7 @@ def main() -> int:
         test_sl651_ascii_uniform, test_sl651_test_frame,
         test_sl651_downlink_queries, test_sl651_config_and_manual_frames,
         test_sl651_init_storage_and_password,
+        test_sl651_func_name_consistency, test_sl651_manual_frame_fujian,
     ]
     for test in tests:
         try:

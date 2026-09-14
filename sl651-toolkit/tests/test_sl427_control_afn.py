@@ -161,6 +161,16 @@ def test_validation_errors() -> None:
     print(f"    {len(bad)} 项超限校验 OK")
 
 
+def test_control_fill_response_tolerance() -> None:
+    """控制/配置响应的 0xAA 缺测填充不得抛 DecodeError（审计 v2.3 M-2）。"""
+    for afn, data in [(0x96, b"\xAA" * 2), (0xA0, b"\xAA" * 2), (0xA1, b"\xAA" * 4)]:
+        r = _decode(_resp(afn, data))
+        assert r.elements, f"AFN 0x{afn:02X} 应产出降级要素"
+    r = _decode(_resp(0x96, b"\xAA" * 2))
+    assert r.elements[0].value == "-", r.elements
+    print("    96H/A0H/A1H 0xAA 填充降级 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL427 控制/配置 AFN 90H~96H, A0H~A2H 测试")
@@ -174,6 +184,7 @@ def main() -> int:
         ("A0H", test_a0h_realtime_kinds),
         ("A1H", test_a1h_report_kinds),
         ("A2H", test_a2h_channel),
+        ("0xAA 填充容错", test_control_fill_response_tolerance),
         ("校验", test_validation_errors),
     ]
     for name, fn in tests:

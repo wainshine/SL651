@@ -10,7 +10,7 @@
 |------|------|
 | `bcd.py` | BCD 编解码（大端/小端）、时间编解码、hex↔bytes 转换 |
 | `crc.py` | CRC-16/MODBUS（0xA001，初值 0xFFFF）、CRC8（0xE5，供 sl427 使用） |
-| `constants.py` | 协议常量：101 项 `SL651_ELEMENTS`、102 项 `SL651_ASCII_ELEMENTS`、FF 子标识符、FUNC_MAP（23 项）、STATION_TYPE（11 类）、STATUS_BITS（12 bit）、帧偏移常量 |
+| `constants.py` | 协议常量：101 项 `SL651_ELEMENTS`、101 项 `SL651_ASCII_ELEMENTS`、FF 子标识符、FUNC_MAP（30 项）、STATION_TYPE（11 类）、STATUS_BITS（12 bit）、帧偏移常量 |
 | `decoder.py` | 报文解码器：定义符动态解析、ASCII 帧解析、状态位解码、CRC 校验、`feed()` 流式解析与多包 SYN/ETB 重组 |
 | `encoder.py` | 报文编码器：上行 6 类 + 下行 14 类 + ASCII 编码 + 通用帧构造 |
 

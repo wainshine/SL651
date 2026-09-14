@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.3.0  
+> 版本：v1.3.1  
 > 最后更新：2026-09-14  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 57 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
+├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 59 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -120,7 +120,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
     return (b >> 3) & 0x1F, b & 0x07
 ```
 
-**要素标识符表（规约附录C）** — 101 项已全部收录。支持 HEX/BCD 引导符表 `SL651_ELEMENTS` 和 ASCⅡ 标识符表 `SL651_ASCII_ELEMENTS`（102 项）。**FF 子标识符**已收录北京水务平台自定义要素（GPRS信号、机箱温度、地温、垂线流速等）及水测家自定义要素。
+**要素标识符表（规约附录C）** — 101 项已全部收录。支持 HEX/BCD 引导符表 `SL651_ELEMENTS` 和 ASCⅡ 标识符表 `SL651_ASCII_ELEMENTS`（101 项，时间步长码 `DRxnn` 由解码器动态识别）。**FF 子标识符**已收录北京水务平台自定义要素（GPRS信号、机箱温度、地温、垂线流速等）及水测家自定义要素。
 
 **负数 BCD 编码（规约 6.6.3.3a）**：首字节 `0xFF` 表示负数。
 
@@ -406,8 +406,10 @@ python web/app.py
 | `test_sl651_downlink_queries` | SL651 | 无参数体下行查询帧 37/44/45/46/50/51H（结束符 ENQ） |
 | `test_sl651_config_and_manual_frames` | SL651 | 42H 修改运行参数 / 41H·43H 读取配置 / 0x35 人工置数报 |
 | `test_sl651_init_storage_and_password` | SL651 | 47H 初始化固态存储（97H 标识符）/ 49H 修改密码（03H 标识符） |
+| `test_sl651_func_name_consistency` | SL651 | FUNC_MAP 功能码名称与规约/编码器一致（v1.3.1 M-1） |
+| `test_sl651_manual_frame_fujian` | SL651 | 真实福建 0x35 人工置数报 F2 载荷解析（v1.3.1 M-3） |
 
-**总计: 57 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
+**总计: 59 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
 
 ### 7.4 辅助测试套件
 
@@ -416,10 +418,10 @@ python web/app.py
 | `test_round1_blindspots.py` | 10 项盲区测试（小时报往返/异常、SL427 81/82/84、充值量数值级） |
 | `test_simulator_integration.py` | 5 组端到端集成（引擎全链路、雨量加报边沿、站点注册、TcpSender 真实 TCP 收发、0x26 不归零累计） |
 | `test_fuzz_decoders.py` | SL651/SL427 解码器变异测试（各 600 次，断言仅抛受控 `DecodeError`） |
-| `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 |
-| `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 |
-| `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 |
-| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通 |
+| `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 + 10H 地址长度/A2H 信道地址长度校验（v1.3.1 M-4） |
+| `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 + 0xAA/0xFF 缺测填充容错（v1.3.1 M-2） |
+| `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 + 0xAA 填充容错（v1.3.1 M-2） |
+| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通、ASCII 方向位保留（v1.3.1 L-2） |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -507,6 +509,14 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | SL651 多包 SYN/ETB 重组 | `feed()` 流式 API，按包总数/序列号重组，支持乱序/增量/垃圾字节（`tests/test_sl651_multipacket.py`） |
 | SL651 编码器补全 | 0x30/0x35/41H/42H/43H/44H/45H/46H/47H/49H/50H/51H + `build_downlink_query` |
 | 模拟器 0x26 累计雨量 | 改为不归零累计（`RainGenerator.total_accum`，上限翻转） |
+
+### ✅ 已完成（v1.3.1）
+
+| 任务 | 说明 |
+|------|------|
+| 审计 v2.3 修复 | M-1 FUNC_MAP 名称 / M-2 SL427 0xAA 填充 / M-3 人工置数 F2 契约 / M-4 地址长度校验 |
+| 审计 v2.3 L 级修复 | L-1 5CH 名称 / L-2 ASCII 方向位 / L-3 死键 / L-4 0x26 量程注释 / L-5 示例注释 / L-6 文档计数 |
+| 测试增强 | 主套件 57 → 59 项；辅助套件补 0xAA 填充容错、地址长度校验、ASCII 方向位 |
 
 ### ⬜ 远期（P4）
 

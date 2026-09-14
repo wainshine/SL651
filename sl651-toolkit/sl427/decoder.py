@@ -266,28 +266,47 @@ def _parse_terminal(data: bytes) -> list[ElementValue]:
         ))
     return items
 
-def _bcd_le_signed(data: bytes) -> int:
-    """小端 BCD（末字节 D7 为符号位，1=负）-> 有符号整数。"""
+def _safe_bcd_le(data: bytes) -> int | None:
+    """小端 BCD 安全解析：含 0xAA/0xFF 缺测填充或非法半字节时返回 None。
+
+    规约规定未采集/无数据的参数用 0xAA 占位（如规约行 1172/900），此时不应
+    将整帧判为解码失败，而应降级显示 '-'。
+    """
+    try:
+        return bcd_bytes_to_int_le(data)
+    except ValueError:
+        return None
+
+
+def _bcd_le_signed(data: bytes) -> int | str:
+    """小端 BCD（末字节 D7 为符号位，1=负）-> 有符号整数；无效返回 '-'。"""
     if not data:
-        return 0
+        return "-"
     last = data[-1]
     neg = bool(last & 0x80)
     clean = bytes(data[:-1]) + bytes([last & 0x7F])
-    try:
-        v = bcd_bytes_to_int_le(clean)
-    except ValueError:
-        return 0
+    v = _safe_bcd_le(clean)
+    if v is None:
+        return "-"
     return -v if neg else v
 
 
-def _parse_flow_limit_427(seg: bytes) -> tuple[float, str]:
-    """解析 5B 流量参数（表20，小端 BCD，BYTE5 高半字节=符号/单位）。"""
+def _parse_flow_limit_427(seg: bytes) -> tuple[float | str, str]:
+    """解析 5B 流量参数（表20，小端 BCD，BYTE5 高半字节=符号/单位）。
+
+    0xAA/0xFF 填充（缺测）返回 ('-', '')。
+    """
     if len(seg) < 5:
         return 0.0, ""
+    if all(b == 0xAA for b in seg) or all(b == 0xFF for b in seg):
+        return "-", ""
     high = seg[4]
     sign = -1 if (high & 0xC0) == 0xC0 else 1
     unit = "m³/h" if (high & 0x30) == 0x30 else "m³/s"
-    scaled = bcd_bytes_to_int_le(seg[:4]) + (high & 0x0F) * 10 ** 8
+    base = _safe_bcd_le(seg[:4])
+    if base is None:
+        return "-", unit
+    scaled = base + (high & 0x0F) * 10 ** 8
     return sign * scaled / 1000.0, unit
 
 
@@ -307,16 +326,28 @@ def _parse_switch_record_427(seg: bytes) -> str:
 
 
 def _parse_level_limits_427(seg: bytes) -> list[ElementValue]:
-    """解析 7B 水位基值/上下限（表15/16，小端 BCD，基值第3字节 D7 符号位）。"""
+    """解析 7B 水位基值/上下限（表15/16，小端 BCD，基值第3字节 D7 符号位）。
+
+    0xAA/0xFF 填充（缺测）降级显示 '-'。
+    """
     if len(seg) < 7:
         return []
+    fill = all(b == 0xAA for b in seg) or all(b == 0xFF for b in seg)
     b0, b1, b2 = seg[0], seg[1], seg[2]
-    base_scaled = bcd_bytes_to_int_le(bytes([b0, b1, b2 & 0x7F]))
-    base = base_scaled / 100.0
-    if b2 & 0x80:
-        base = -base
-    lower = bcd_bytes_to_int_le(seg[3:5]) / 100.0
-    upper = bcd_bytes_to_int_le(seg[5:7]) / 100.0
+    if fill:
+        base = lower = upper = "-"
+    else:
+        base_scaled = _safe_bcd_le(bytes([b0, b1, b2 & 0x7F]))
+        low_v = _safe_bcd_le(seg[3:5])
+        up_v = _safe_bcd_le(seg[5:7])
+        if base_scaled is None or low_v is None or up_v is None:
+            base = lower = upper = "-"
+        else:
+            base = base_scaled / 100.0
+            if b2 & 0x80:
+                base = -base
+            lower = low_v / 100.0
+            upper = up_v / 100.0
     return [
         ElementValue(name="水位基值", value=base, unit="m",
                      raw=bytes_to_hex_compact(seg[:3]), editable=False, decimal=2),
@@ -328,11 +359,20 @@ def _parse_level_limits_427(seg: bytes) -> list[ElementValue]:
 
 
 def _parse_pressure_limits_427(seg: bytes) -> list[ElementValue]:
-    """解析 8B 水压上/下限（表17，4B 小端 BCD ×2）。"""
+    """解析 8B 水压上/下限（表17，4B 小端 BCD ×2）。0xAA/0xFF 填充降级 '-'。"""
     if len(seg) < 8:
         return []
-    upper = bcd_bytes_to_int_le(seg[:4]) / 100.0
-    lower = bcd_bytes_to_int_le(seg[4:8]) / 100.0
+    fill = all(b == 0xAA for b in seg) or all(b == 0xFF for b in seg)
+    if fill:
+        upper = lower = "-"
+    else:
+        up_v = _safe_bcd_le(seg[:4])
+        low_v = _safe_bcd_le(seg[4:8])
+        if up_v is None or low_v is None:
+            upper = lower = "-"
+        else:
+            upper = up_v / 100.0
+            lower = low_v / 100.0
     return [
         ElementValue(name="水压上限", value=upper, unit="kPa",
                      raw=bytes_to_hex_compact(seg[:4]), editable=False, decimal=2),
@@ -355,7 +395,8 @@ def _parse_water_quality_427(data: bytes) -> list[ElementValue]:
             if len(seg) < 4:
                 break
             name = C.WATER_QUALITY_PARAMS[bit] if bit < len(C.WATER_QUALITY_PARAMS) else f"参数{bit}"
-            out.append(ElementValue(name=name, value=bcd_bytes_to_int_le(seg),
+            v = _safe_bcd_le(seg)
+            out.append(ElementValue(name=name, value=v if v is not None else "-",
                                     unit="", raw=bytes_to_hex_compact(seg),
                                     editable=False))
             idx += 1
@@ -418,9 +459,10 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     value="、".join(names) or "无",
                                     unit="", raw=raw, editable=False))
             for i in range((len(data) - 2) // 2):
-                iv = bcd_bytes_to_int_le(data[2 + i * 2:4 + i * 2])
+                iv = _safe_bcd_le(data[2 + i * 2:4 + i * 2])
                 label = C.RT_KINDS_REPORT[i] if i < len(C.RT_KINDS_REPORT) else f"#{i}"
-                out.append(ElementValue(name=f"自报间隔[{label}]", value=iv,
+                out.append(ElementValue(name=f"自报间隔[{label}]",
+                                        value=iv if iv is not None else "-",
                                         unit="min", raw=raw, editable=False))
         else:
             out.append(ElementValue(name="数据自报种类及间隔", value=f"{len(data)} 字节",
@@ -434,7 +476,9 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     unit="", raw=f"{mask:04X}", editable=False))
     elif afn_hex == "55":
         if len(data) >= 9:
-            out.append(ElementValue(name="最近充值量", value=bcd_bytes_to_int_le(data[:4]),
+            recharge = _safe_bcd_le(data[:4])
+            out.append(ElementValue(name="最近充值量",
+                                    value=recharge if recharge is not None else "-",
                                     unit="m³", raw=bytes_to_hex_compact(data[:4]),
                                     editable=False))
             out.append(ElementValue(name="剩余水量", value=_bcd_le_signed(data[4:9]),
@@ -442,7 +486,9 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     editable=False))
     elif afn_hex == "56":
         if len(data) >= 8:
-            out.append(ElementValue(name="剩余水量报警值", value=bcd_bytes_to_int_le(data[:3]),
+            alarm_v = _safe_bcd_le(data[:3])
+            out.append(ElementValue(name="剩余水量报警值",
+                                    value=alarm_v if alarm_v is not None else "-",
                                     unit="m³", raw=bytes_to_hex_compact(data[:3]),
                                     editable=False))
             out.append(ElementValue(name="剩余水量", value=_bcd_le_signed(data[3:8]),
@@ -581,8 +627,9 @@ def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     editable=False))
     elif afn_hex == "96":
         if len(data) >= 2:
+            pw_v = _safe_bcd_le(data[:2])
             out.append(ElementValue(name="密码设置响应",
-                                    value=bcd_bytes_to_int_le(data[:2]),
+                                    value=pw_v if pw_v is not None else "-",
                                     unit="", raw=raw, editable=False))
     elif afn_hex == "a0":
         if len(data) >= 2:
@@ -599,9 +646,10 @@ def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     value="、".join(names) or "无",
                                     unit="", raw=raw, editable=False))
             for i in range((len(data) - 2) // 2):
-                iv = bcd_bytes_to_int_le(data[2 + i * 2:4 + i * 2])
+                iv = _safe_bcd_le(data[2 + i * 2:4 + i * 2])
                 label = C.RT_KINDS_REPORT[i] if i < len(C.RT_KINDS_REPORT) else f"#{i}"
-                out.append(ElementValue(name=f"自报间隔[{label}]", value=iv,
+                out.append(ElementValue(name=f"自报间隔[{label}]",
+                                        value=iv if iv is not None else "-",
                                         unit="min", raw=raw, editable=False))
     elif afn_hex == "a2":
         out.append(ElementValue(name="主备信道配置", value=raw, unit="",
@@ -636,6 +684,10 @@ def _format_addr(addr: bytes) -> str:
     因此 BYTE1=00H 可靠判定为方式2，不存在方式1 被误判的边界。
     """
 
+    if not addr:
+        return "-"
+    if all(b == 0xAA for b in addr) or all(b == 0xFF for b in addr):
+        return "-"
     if addr[0] == 0x00:
         hex_code = ""
         for b in addr[1:]:

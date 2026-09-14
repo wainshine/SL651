@@ -249,6 +249,30 @@ def test_query_image_validation() -> None:
     print("    图片编号校验 OK")
 
 
+def test_fill_response_tolerance() -> None:
+    """规约合法 0xAA/0xFF 缺测填充不得抛 DecodeError（审计 v2.3 M-2）。"""
+    cases = [
+        (0x50, b"\xAA" * 5),
+        (0x53, b"\xAA" * 4),
+        (0x55, b"\xAA" * 9),
+        (0x56, b"\xAA" * 8),
+        (0x57, b"\xAA" * 11),
+        (0x58, b"\xAA" * 12),
+        (0x59, b"\xAA" * 13),
+        (0x5A, b"\xAA" * 13),
+        (0x62, b"\xAA" * 5),
+        (0x64, b"\xAA" * 9),
+    ]
+    for afn, data in cases:
+        r = _decode(_resp(afn, data))  # 不抛异常即通过
+        assert r.elements, f"AFN 0x{afn:02X} 应产出降级要素"
+    r = _decode(_resp(0x50, b"\xFF" * 5))
+    assert r.elements and r.elements[0].value == "-", r.elements
+    r = _decode(_resp(0x55, b"\xAA" * 9))
+    assert all(x.value == "-" for x in r.elements), r.elements
+    print(f"    {len(cases)} 个 0xAA 填充 + 0xFF 填充降级 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL427 查询类 AFN 50H~65H 测试")
@@ -274,6 +298,7 @@ def main() -> int:
         ("64H", test_64h_flow_limits_response),
         ("65H", test_65h_channel_response),
         ("校验", test_query_image_validation),
+        ("0xAA 填充容错", test_fill_response_tolerance),
     ]
     for name, fn in tests:
         print(f">>> {name}")

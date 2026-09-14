@@ -416,7 +416,8 @@ class SL651Decoder:
             frame = bytes(hdr) + bytes([C.STX]) + combined + bytes([C.ETX])
             crc = crc16(frame)
             return frame + bytes([(crc >> 8) & 0xFF, crc & 0xFF])
-        ident_raw = ((first[19] & 0x80)) | ((body_len >> 8) & 0x0F)
+        ident_first = int(bytes(first[19:21]).decode("ascii"), 16)
+        ident_raw = (ident_first & 0x80) | ((body_len >> 8) & 0x0F)
         ident_lo = body_len & 0xFF
         hdr = bytearray(first[:19])
         hdr.extend(f"{ident_raw:02X}{ident_lo:02X}".encode("ascii"))
@@ -683,9 +684,29 @@ class SL651Decoder:
         pos = 0
         is_uniform = function_code == 0x31
 
-        while pos + 4 <= len(hex_str):
+        while pos + 2 <= len(hex_str):
             code = hex_str[pos:pos + 2]
             pos += 2
+
+            if code == "f2":
+                # 人工置数报（0x35）：F2 标识符 + n 字节原编码数据（规约表38），
+                # F2 后无定义符，剩余全部字节视为原始载荷（与编码器契约一致）。
+                raw_hex = hex_str[pos:]
+                pos = len(hex_str)
+                n_bytes = len(raw_hex) // 2
+                preview = raw_hex[:32].upper()
+                if len(raw_hex) > 32:
+                    preview += "..."
+                elements.append(ElementValue(
+                    code="F2", name="人工置数",
+                    value=f"<人工置数数据 {n_bytes} 字节: {preview}>",
+                    unit="", raw=raw_hex.upper(), data_type="Hex",
+                    byte_len=n_bytes, decimal=0,
+                ))
+                break
+
+            if pos + 2 > len(hex_str):
+                break
             def_hex = hex_str[pos:pos + 2]
             pos += 2
             def_byte = int(def_hex, 16)

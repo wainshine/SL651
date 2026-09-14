@@ -169,6 +169,44 @@ def test_validation_errors() -> None:
     print(f"    {len(bad_calls)} 项超限校验 OK")
 
 
+def test_10h_set_addr_validation() -> None:
+    """AFN=10H 设置地址数据域固定 5B（审计 v2.3 M-4）。"""
+    enc = _enc()
+    frame = enc.build_set_addr(bytes.fromhex("0102030405"))
+    _check_crc(frame)
+    afn, data = _extract(frame, 5)
+    assert afn == 0x10 and data == bytes.fromhex("0102030405"), (afn, data.hex())
+    for bad in (b"", b"\x01", bytes(4), bytes(6)):
+        try:
+            enc.build_set_addr(bad)
+            raise AssertionError(f"长度 {len(bad)} 应抛 EncodeError")
+        except EncodeError:
+            pass
+    print("    10H 地址长度校验 OK")
+
+
+def test_a2h_channel_validation() -> None:
+    """AFN=A2H 信道地址长度按类型码校验（审计 v2.3 M-4）。"""
+    enc = _enc()
+    enc.build_set_channel(0x01, bytes(7))   # 短信 7B
+    enc.build_set_channel(0x02, bytes(7))   # IPV4 7B
+    enc.build_set_channel(0x03, bytes(3))   # 北斗 3B
+    bad_cases = [
+        (0x01, bytes(6), 0xAA, b"\xAA"),
+        (0x02, bytes(3), 0xAA, b"\xAA"),
+        (0x03, bytes(7), 0xAA, b"\xAA"),
+        (0x01, bytes(7), 0xAA, bytes(2)),  # 无备用信道地址应为 1B
+    ]
+    for mt, ma, bt, ba in bad_cases:
+        try:
+            enc.build_set_channel(mt, ma, bt, ba)
+            raise AssertionError(
+                f"类型 0x{mt:02X}/地址 {len(ma)}B/备用 {len(ba)}B 应抛 EncodeError")
+        except EncodeError:
+            pass
+    print("    A2H 信道地址长度校验 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL427 参数设置 AFN=16H~20H 测试")
@@ -184,6 +222,8 @@ def main() -> int:
         ("1EH", test_1eh_relay_auto_switch),
         ("1FH", test_1fh_flow_limits),
         ("20H", test_20h_report_threshold),
+        ("10H 地址校验", test_10h_set_addr_validation),
+        ("A2H 信道校验", test_a2h_channel_validation),
         ("校验", test_validation_errors),
     ]
     for name, fn in tests:

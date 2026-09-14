@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.3.0
+# SL651 水文规约工具包 v1.3.1
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -46,7 +46,7 @@ sl651-toolkit/
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
 │   ├── run_all.py              # 统一测试入口（8 套件）
-│   ├── test_sl651.py           # 主测试 57 项
+│   ├── test_sl651.py           # 主测试 59 项
 │   ├── test_round1_blindspots.py    # 盲区测试 10 项
 │   ├── test_simulator_integration.py # 模拟器端到端集成
 │   ├── test_fuzz_decoders.py   # 解码器变异/流式健壮性
@@ -56,7 +56,7 @@ sl651-toolkit/
 │   └── test_sl651_multipacket.py # SL651 多包 SYN/ETB 重组
 ├── docs/
 │   └── project.md              # 项目规格说明书
-├── audit/                      # 审计报告 v1.1~v2.2
+├── audit/                      # 审计报告 v1.1~v2.3
 ├── requirements.txt            # PyYAML>=6.0 + flask
 └── README.md
 ```
@@ -250,17 +250,31 @@ python web/app.py
 python tests/run_all.py
 
 # 或单独运行
-python tests/test_sl651.py            # 57 项主测试
+python tests/test_sl651.py            # 59 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 8 套件：主套件 57 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 3 组 + SL427 参数 11 组 + 查询 20 组 + 控制 9 组 + SL651 多包 5 组
+- `run_all.py` 共 8 套件：主套件 59 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 3 组 + SL427 参数 11 组 + 查询 20 组 + 控制 9 组 + SL651 多包 5 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
 
 ## 五、版本历史
+
+- **v1.3.1**：审计 v2.3 修复版（4M+6L）
+  - M-1: `FUNC_MAP` 0x38~0x51 功能码名称按规约正文重写，补齐 0x39/0x44/0x4B~0x4F（原 0x44 显示「未知」、0x45~0x51 名称错误）
+  - M-2: SL427 查询/控制响应对规约合法 `0xAA`/`0xFF` 缺测填充降级为 `-`，不再抛 `DecodeError`
+  - M-3: SL651 人工置数报 `F2` 契约统一（F2 后为原编码载荷，无定义符），福建 0x35 帧恢复 1 要素（原 0 要素静默丢失）
+  - M-4: SL427 `build_set_addr`（固定 5B）/`build_set_channel`（按类型码校验地址长度）补数据域长度校验
+  - L-1: `AFN_MAP[0x5C]` 更正为「查询终端机历史日记录」
+  - L-2: ASCII 多包重组保留方向位（原恒判上行）
+  - L-3: 移除 `SL651_ASCII_ELEMENTS` 死占位键 `DRxnn`（动态识别，102 → 101 项）
+  - L-4: 0x26 累计雨量注释/文档对齐实际量程 `N(5,1)`（99999.9mm）
+  - L-5: `examples/fujian_messages.txt` 注释同步更正的功能码名称
+  - L-6: `handoff_test.md` 历史测试计数标注为快照
+  - 测试: 主套件 57 → 59 项（功能码名称一致性 / 人工置数 F2 契约）；辅助套件补 0xAA 填充容错与地址长度校验
+  - 文档一致性 D-1~D-6 修正
 
 - **v1.2.7**：审计 v2.2 修复版（1C+5M+7L 缺陷修复 + 真实报文要素级测试）
   - C-1: 0x31 均匀报实现「标识符组一次 + 多组重复数据」解析（福建帧恢复 12/12 组，原丢失 11 组）

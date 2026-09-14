@@ -41,4 +41,4 @@ __all__ = [
     "SL651Encoder", "EncodeError",
 ]
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"

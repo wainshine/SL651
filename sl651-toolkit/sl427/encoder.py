@@ -260,7 +260,10 @@ class SL427Encoder:
     # ------------------------------------------------------------------
 
     def build_set_addr(self, new_addr_bytes: bytes, pw: int = 0) -> bytes:
-        """设置地址 (AFN=10H)。"""
+        """设置地址 (AFN=10H)，数据域固定 5B（规约表B.3）。"""
+        if len(new_addr_bytes) != 5:
+            raise EncodeError(
+                f"设置地址数据域必须为 5 字节，当前 {len(new_addr_bytes)} 字节")
         return self.build_param_set_frame(0x10, 0x00, new_addr_bytes, pw)
 
     def build_set_clock(self, dt: datetime | None = None, pw: int = 0) -> bytes:
@@ -606,9 +609,27 @@ class SL427Encoder:
 
         main_type/backup_type: 01短信/02IPV4/03北斗；无备用信道时 backup_type=0xAA,
         backup_addr=b"\\xAA"（合计 0xAAAA）。
+        地址码长度由类型码决定（规约 7.2.24 c/表26）：短信 7B BCD、IPV4 7B HEX、
+        北斗 3B BCD；无备用信道地址码为 1B（0xAA）。
         """
         if not 0 <= main_type <= 0xFF or not 0 <= backup_type <= 0xFF:
             raise EncodeError("信道类型码超范围(0~0xFF)")
+
+        def _check_addr_len(type_code: int, addr: bytes, which: str) -> None:
+            if type_code == 0xAA:
+                if len(addr) != 1:
+                    raise EncodeError(
+                        f"{which}无备用信道时地址码应为 1 字节 0xAA，"
+                        f"当前 {len(addr)} 字节")
+                return
+            n = {0x01: 7, 0x02: 7, 0x03: 3}.get(type_code)
+            if n is not None and len(addr) != n:
+                raise EncodeError(
+                    f"{which}类型码 0x{type_code:02X} 地址码应为 {n} 字节，"
+                    f"当前 {len(addr)} 字节")
+
+        _check_addr_len(main_type, main_addr, "主信道")
+        _check_addr_len(backup_type, backup_addr, "备用信道")
         data = bytes([main_type]) + bytes(main_addr) + \
             bytes([backup_type]) + bytes(backup_addr)
         return self.build_param_set_frame(0xA2, 0x00, data, pw)

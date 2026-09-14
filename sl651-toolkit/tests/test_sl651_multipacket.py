@@ -53,6 +53,56 @@ def _split(orig: bytes) -> tuple[bytes, bytes]:
     return body[:mid], body[mid:]
 
 
+def _ascii_orig_frame() -> bytes:
+    enc = SL651Encoder(center_addr=0x01, station_addr="1234567890",
+                       password=0, station_type=0x48)
+    return enc.build_ascii_frame(
+        [("Z", "12.345"), ("Q", "5.678")],
+        obs_time=datetime(2026, 9, 14, 10, 0))
+
+
+def _make_ascii_packet(orig: bytes, part: bytes, total: int, seq: int,
+                       end_marker: int) -> bytes:
+    """基于正常 ASCII 帧头构造 ASCII SYN 分包帧（6 位包总数/序列号）。"""
+    ident_raw = int(orig[19:23].decode("ascii"), 16)
+    body_len = 6 + len(part)  # 包总数(3)+序列号(3) + 载荷
+    ident_hi = ((ident_raw >> 8) & 0x80) | ((body_len >> 8) & 0x0F)
+    ident_lo = body_len & 0xFF
+    hdr = bytearray(orig[:19])
+    hdr.extend(f"{ident_hi:02X}{ident_lo:02X}".encode("ascii"))
+    pkt = f"{total:03d}{seq:03d}".encode("ascii")
+    frame = bytes(hdr) + bytes([C.SYN]) + pkt + part + bytes([end_marker])
+    crc = crc16(frame)
+    return frame + f"{crc:04X}".encode("ascii")
+
+
+def test_ascii_reassemble_direction_preserved() -> None:
+    """ASCII 多包重组后方向位（ident bit7）不得丢失（审计 v2.3 L-2）。"""
+    orig = _ascii_orig_frame()
+    ident_raw = int(orig[19:23].decode("ascii"), 16) | 0x8000  # 置方向=下行
+    body_len = ((ident_raw >> 8) & 0x0F) << 8 | (ident_raw & 0xFF)
+    etx_pos = C.ASCII_BODY_OFFSET + body_len
+    head = bytearray(orig[:19]) + f"{ident_raw:04X}".encode("ascii")
+    head += bytes([orig[C.ASCII_STX_OFFSET]])
+    frame_no_crc = bytes(head) + orig[C.ASCII_BODY_OFFSET:etx_pos + 1]
+    orig = frame_no_crc + f"{crc16(frame_no_crc):04X}".encode("ascii")
+
+    body = orig[C.ASCII_BODY_OFFSET:C.ASCII_BODY_OFFSET + body_len]
+    mid = len(body) // 2
+    p1 = _make_ascii_packet(orig, body[:mid], 2, 1, C.ETB)
+    p2 = _make_ascii_packet(orig, body[mid:], 2, 2, C.ETX)
+
+    dec = SL651Decoder()
+    assert dec.feed(p1) == [], "首包应等待后续包"
+    out = dec.feed(p2)
+    assert len(out) == 1, f"应重组出 1 帧, 实际 {len(out)}"
+    r = out[0]
+    assert r.crc_ok and r.encoding == "ASCII", f"crc={r.crc_ok} enc={r.encoding}"
+    assert r.direction == 1, f"方向位丢失: direction={r.direction}"
+    assert r.function_code == 0x32
+    print("    ASCII 多包重组方向位保留 OK")
+
+
 def test_reassemble_two_packets() -> None:
     orig = _orig_frame()
     p1_body, p2_body = _split(orig)
@@ -139,6 +189,7 @@ def main() -> int:
         ("3 包一次性", test_reassemble_three_packets_single_call),
         ("增量字节喂入", test_reassemble_incremental_bytes),
         ("单帧直通", test_single_frame_feed_passthrough),
+        ("ASCII 方向位", test_ascii_reassemble_direction_preserved),
     ]
     for name, fn in tests:
         print(f">>> {name}")
