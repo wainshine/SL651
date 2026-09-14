@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.2.8  
+> 版本：v1.3.0  
 > 最后更新：2026-09-14  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 53 项、test_round1_blindspots.py 10 项、test_simulator_integration.py 4 项、test_fuzz_decoders.py 2 组、test_sl427_param_afn.py 11 组）
+├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 57 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -86,18 +86,26 @@ sl651-toolkit/
 | 功能码 | 报文类型 | 方向 | 结束符 | 解码 | 编码 | 说明 |
 |--------|----------|------|--------|------|------|------|
 | `2F` | 链路维持报 | 上行 | ETX | ✅ | ✅ `build_link_maintain_frame` | 仅流水号+发报时间 |
-| `30` | 测试报 | 上行 | ETX | ✅ | — | 设备检修测试 |
+| `30` | 测试报 | 上行 | ETX | ✅ | ✅ `build_test_frame` | 设备检修测试 |
 | `31` | 均匀报 | 上行 | ETX | ✅ | — | 等间隔：标识符组仅一次 + 多组重复数据（§6.6.4.4 表30） |
 | `32` | 定时报 | 上行 | ETX | ✅ | ✅ `build_timing_frame` | 定时上报水文要素 |
 | `33` | 加报报 | 上行 | ETX | ✅ | ✅ `build_alarm_frame` | 阈值触发或变化报警 |
 | `34` | 小时报 | 上行 | ETX | ✅ | ✅ `build_hourly_frame` | 每小时 12 组 5min 间隔水位 |
-| `35` | 人工置数报 | 上行 | ETX | ✅ | — | 人工录入数据 |
+| `35` | 人工置数报 | 上行 | ETX | ✅ | ✅ `build_manual_frame` | F2 标识符 + 原编码数据 |
 | `37` | 查询实时数据 | 下行 | ENQ | — | ✅ `build_query_frame` | 查询所有实时数据（表42） |
 | `40` | 修改基本配置 | 下行 | ENQ | — | ✅ `build_set_param_frame` | 参数设置 |
-| `41` | 读取基本配置 | 下行 | ENQ | — | — | 查询响应 |
-| `48` | 恢复出厂设置 | 下行 | ENQ | — | ✅ `build_reset_frame` | 恢复出厂 |
-| `49` | 修改密码 | 下行 | ENQ | — | — | 修改终端密码 |
+| `41` | 读取基本配置 | 下行 | ENQ | — | ✅ `build_read_config_frame` | 参数标识符列表（附录D） |
+| `42` | 修改运行参数 | 下行 | ENQ | — | ✅ `build_set_param_frame(fc=0x42)` | 同 40H 正文 |
+| `43` | 读取运行参数 | 下行 | ENQ | — | ✅ `build_read_config_frame(fc=0x43)` | 参数标识符列表（附录D） |
+| `44` | 查询水泵电机数据 | 下行 | ENQ | — | ✅ `build_query_pump_data` | 空正文 |
+| `45` | 查询软件版本 | 下行 | ENQ | — | ✅ `build_query_software_version` | 空正文 |
+| `46` | 查询状态及报警 | 下行 | ENQ | — | ✅ `build_query_status_alarm` | 空正文 |
+| `47` | 初始化固态存储 | 下行 | ENQ | — | ✅ `build_init_solid_storage` | 97H 标识符（附录D #120） |
+| `48` | 恢复出厂设置 | 下行 | ENQ | — | ✅ `build_reset_frame` | 98H 标识符 |
+| `49` | 修改密码 | 下行 | ENQ | — | ✅ `build_change_password_frame` | 03H 标识符 + 新旧密码 2B |
 | `4A` | 设置时钟 | 下行 | ENQ | — | ✅ `build_clock_sync_frame` | 时钟校准 |
+| `50` | 查询事件记录 | 下行 | ENQ | — | ✅ `build_query_event_record` | 空正文 |
+| `51` | 查询时钟 | 下行 | ENQ | — | ✅ `build_query_clock` | 空正文 |
 
 ### 2.3 要素编码
 
@@ -138,6 +146,8 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 **输出**: `DecodedMessage` 数据类，含报头信息、要素列表、CRC 信息、逐字节视图、非致命告警 `warnings`（如 F4/F5 定义符与规范不符）。
 
+**流式解析与多包重组**: `feed(bytes) -> list[DecodedMessage]` 支持跨次调用缓冲不完整帧，并按 SYN 帧「包总数/序列号」（表22：3B，高12位总数/低12位序号）重组多包正文（ETB=后续还有包，ETX=最后一包，规约 6.3.2.5）；支持乱序到达与增量喂入。`reset()` 清空状态。
+
 ### 2.6 编码器设计
 
 **编码器**: `SL651Encoder(center_addr, station_addr, password, station_type)`
@@ -147,11 +157,18 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_timing_frame(elements)` | 0x32 | 上行 | ETX | ✅ 定时报 |
 | `build_alarm_frame(elements)` | 0x33 | 上行 | ETX | ✅ 加报报 |
 | `build_hourly_frame(levels, inst, v)` | 0x34 | 上行 | ETX | ✅ 小时报（12×F5数组） |
+| `build_test_frame(elements)` | 0x30 | 上行 | ETX | ✅ 测试报（正文同定时报） |
+| `build_manual_frame(payload)` | 0x35 | 上行 | ETX | ✅ 人工置数报（F2 标识符 + 原编码） |
+| `build_init_solid_storage()` | 0x47 | 下行 | ENQ | ✅ 初始化固态存储（97H 标识符） |
+| `build_change_password_frame(old, new)` | 0x49 | 下行 | ENQ | ✅ 修改密码（03H 标识符） |
 | `build_link_maintain_frame()` | 0x2F | 上行 | ETX | ✅ 链路维持 |
 | `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ✅ ASCII 编码（SOH起始） |
 | `build_query_frame()` | 0x37 | 下行 | ENQ | ✅ 查询实时数据（空正文，表42） |
+| `build_downlink_query(func)` | 任意 | 下行 | ENQ | ✅ 通用空正文下行查询 |
+| `build_query_pump_data/software_version/status_alarm/event_record/clock()` | 44/45/46/50/51 | 下行 | ENQ | ✅ 无参数体查询 |
 | `build_query_body(guides)` | 3AH | 下行 | ENQ | ✅ 查询指定要素（正文含引导符） |
-| `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | ✅ 参数设置 |
+| `build_set_param_frame(params, function_code=0x40)` | 0x40/0x42 | 下行 | ENQ | ✅ 参数设置/修改运行参数 |
+| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 下行 | ENQ | ✅ 读取基本配置/运行参数 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | ✅ 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | ✅ 恢复出厂 |
 | `build_frame(function_code, body, direction, ascii_mode, end_marker, tx_time)` | 任意 | 任意 | 可指定 | ✅ 通用帧构造（正文 >4095 抛 `EncodeError`） |
@@ -179,8 +196,29 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `11` | 设置时钟 (6B BCD) | 下行 | — | ✅ `build_set_clock` | 含星期月复合字节 |
 | `12` | 设置工作模式 (1B) | 下行 | — | ✅ `build_set_work_mode` | 0=兼容/1=自报/2=查询/3=调试 |
 | `15` | 设置充值量 (4B BCD) | 下行 | — | ✅ `build_set_recharge` | m³ |
+| `16` | 剩余水量报警值 (3B BCD) | 下行 | — | ✅ `build_set_recharge_alarm` | m³ |
+| `17` | 水位基值/上下限 (N×7B) | 下行 | — | ✅ `build_set_level_limits` | 第3字节 D7 符号位 |
+| `18` | 水压上/下限 (N×8B) | 下行 | — | ✅ `build_set_pressure_limits` | kPa |
+| `19/1A` | 水质参数种类及上/下限 | 下行 | — | ✅ `build_set_water_quality` | 5B 位图 + N×4B |
+| `1B` | 水量初始值 (N×5B) | 下行 | — | ✅ `build_set_water_amount` | m³ |
+| `1C` | 中继引导码长值 (1B BIN) | 下行 | — | ✅ `build_set_relay_code_len` | s |
+| `1D` | 中继转发地址 (N×5B) | 下行 | — | ✅ `build_set_relay_addr` | — |
+| `1E` | 中继自动切换/自报 (1B) | 下行 | — | ✅ `build_set_relay_auto_switch` | — |
+| `1F` | 流量参数上限 (N×5B) | 下行 | — | ✅ `build_set_flow_limits` | 符号/单位在 BYTE5 |
+| `20` | 启报阈值及固态间隔 | 下行 | — | ✅ `build_set_report_threshold` | — |
 | `30` | IC卡功能有效 | 下行 | — | ✅ `build_set_ic_card_on` | — |
 | `31` | 取消IC卡功能 | 下行 | — | ✅ `build_set_ic_card_off` | — |
+| `50~65` | 参数查询 | 下行 | — | ✅ `build_query_*` | 查询帧无 AUX |
+| `50~65` | 查询响应 | 上行 | ✅ `_parse_query_response` | — | 地址/时钟/模式/水量/状态/事件/中继/流量等 |
+| `90` | 复位终端参数和状态 | 下行 | — | ✅ `build_reset` | 01=参数不变/02=恢复出厂 |
+| `91` | 清空历史数据单元 | 下行 | — | ✅ `build_clear_history` | D0雨量/D1水位/D2水量 |
+| `92/93` | 启动/关闭水泵或阀门 | 下行 | — | ✅ `build_start_pump`/`build_stop_pump` | — |
+| `94/95` | 切换通信机/中继工作机 | 下行 | — | ✅ `build_switch_comm`/`build_switch_relay_work` | — |
+| `96` | 修改终端密码 | 下行 | — | ✅ `build_change_password` | 2B BCD |
+| `90~96` | 控制响应 | 上行 | ✅ `_parse_control_response` | — | 5AH=执行完毕 |
+| `A0` | 设置需查询实时种类 | 下行 | ✅ | ✅ `build_set_realtime_kinds` | 2B 位图（表23） |
+| `A1` | 设置自报种类及间隔 | 下行 | ✅ | ✅ `build_set_report_kinds` | 2B 位图 + N×2B（表24/25） |
+| `A2` | 设置主备信道及中心地址 | 下行 | ✅ | ✅ `build_set_channel` | 类型码+地址 |
 | `B0` | 查询/实时值 | 上行 | ✅ | ✅ `build_query_response` | 按命令类型码解析 |
 | `C0` | 自报实时数据 | 上行 | ✅ | ✅ `build_self_report_c0` | D+alarm(2B)+state(2B)+Tp(7B) |
 | `81` | 自报告警 | 上行 | ✅ | ✅ `build_self_report_81` | 结构同 C0 |
@@ -238,6 +276,17 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_set_flow_limits(points, pw)` | ✅ | 流量参数上限值 (AFN=1F) |
 | `build_set_report_threshold(category, index, interval_min, threshold, pw)` | ✅ | 启报阈值及固态存储间隔 (AFN=20) |
 | `build_set_ic_card_on/off(pw)` | ✅ | IC卡功能 (AFN=30/31) |
+| `build_query(afn, data, func_code)` | ✅ | 通用查询帧（下行，无 AUX） |
+| `build_query_addr/clock/work_mode/report_kinds/realtime_kinds/recharge/remaining_alarm/event_record/status_alarm/pump_data/relay_code_len/relay_addr/relay_status/flow_limits/channel` | ✅ | 查询类便捷方法 (AFN=50H~65H) |
+| `build_query_image(image_no)` | ✅ | 查询实时图像 (AFN=61H) |
+| `build_reset(factory_reset, pw)` | ✅ | 复位终端 (AFN=90H) |
+| `build_clear_history(rain, level, water, pw)` | ✅ | 清空历史数据 (AFN=91H) |
+| `build_start_pump/stop_pump(code, is_valve, pw)` | ✅ | 启停水泵/阀门 (AFN=92/93H) |
+| `build_switch_comm/switch_relay_work(machine, pw)` | ✅ | 切换通信机/中继工作机 (AFN=94/95H) |
+| `build_change_password(password, pw)` | ✅ | 修改密码 (AFN=96H) |
+| `build_set_realtime_kinds(mask, pw)` | ✅ | 设置需查询实时种类 (AFN=A0H) |
+| `build_set_report_kinds(mask, intervals, pw)` | ✅ | 设置自报种类及间隔 (AFN=A1H) |
+| `build_set_channel(main_type, main_addr, ...)` | ✅ | 设置主备信道及中心地址 (AFN=A2H) |
 | `build_param_set_frame(afn, func, data, pw, tp, key1)` | ✅ | 通用参数设置帧模板（PW 校验统一抛 EncodeError） |
 
 **辅助函数**: `make_ctrl()`, `encode_address()`, `encode_tp()`
@@ -353,17 +402,24 @@ python web/app.py
 | `test_sl427_short_data_degrade` | SL427 | C0 短数据域降级解析（v1.2.7 L-3） |
 | `test_sl427_addr_method` | SL427 | 地址方式1/方式2 判定（v1.2.7 L-4） |
 | `test_sl651_ascii_uniform` | SL651 | 0x31 ASCII 均匀报：时间步长码 DRxnn + 单标识符多值数组（v1.2.7） |
+| `test_sl651_test_frame` | SL651 | 0x30 测试报编码（正文同定时报） |
+| `test_sl651_downlink_queries` | SL651 | 无参数体下行查询帧 37/44/45/46/50/51H（结束符 ENQ） |
+| `test_sl651_config_and_manual_frames` | SL651 | 42H 修改运行参数 / 41H·43H 读取配置 / 0x35 人工置数报 |
+| `test_sl651_init_storage_and_password` | SL651 | 47H 初始化固态存储（97H 标识符）/ 49H 修改密码（03H 标识符） |
 
-**总计: 53 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
+**总计: 57 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
 
 ### 7.4 辅助测试套件
 
 | 套件 | 内容 |
 |------|------|
 | `test_round1_blindspots.py` | 10 项盲区测试（小时报往返/异常、SL427 81/82/84、充值量数值级） |
-| `test_simulator_integration.py` | 4 组端到端集成（引擎全链路、雨量加报边沿、站点注册、TcpSender 真实 TCP 收发） |
+| `test_simulator_integration.py` | 5 组端到端集成（引擎全链路、雨量加报边沿、站点注册、TcpSender 真实 TCP 收发、0x26 不归零累计） |
 | `test_fuzz_decoders.py` | SL651/SL427 解码器变异测试（各 600 次，断言仅抛受控 `DecodeError`） |
 | `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 |
+| `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 |
+| `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 |
+| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通 |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -433,7 +489,7 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 小时报 F4 雨量组 | ✅ |
 | 盲区测试全覆盖（10/10 通过） | ✅ |
 
-### ✅ 已完成（v1.2.8 增补）
+### ✅ 已完成（v1.2.8）
 
 | 任务 | 说明 |
 |------|------|
@@ -442,13 +498,23 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 解码器变异/模糊测试 | `tests/test_fuzz_decoders.py`（SL651/SL427 各 600 次） |
 | SL427 参数设置 AFN 16H~20H | 11 个便捷方法 + 数据域布局测试（`tests/test_sl427_param_afn.py`） |
 
+### ✅ 已完成（v1.3.0）
+
+| 任务 | 说明 |
+|------|------|
+| SL427 查询类 AFN 50H~65H | 17 个查询帧构造 + 20 组响应解析（`tests/test_sl427_query_afn.py`） |
+| SL427 控制/配置 AFN 90H~96H、A0H~A2H | 复位/清空/启停泵/切换/改密/实时种类/自报种类/主备信道（`tests/test_sl427_control_afn.py`） |
+| SL651 多包 SYN/ETB 重组 | `feed()` 流式 API，按包总数/序列号重组，支持乱序/增量/垃圾字节（`tests/test_sl651_multipacket.py`） |
+| SL651 编码器补全 | 0x30/0x35/41H/42H/43H/44H/45H/46H/47H/49H/50H/51H + `build_downlink_query` |
+| 模拟器 0x26 累计雨量 | 改为不归零累计（`RainGenerator.total_accum`，上限翻转） |
+
 ### ⬜ 远期（P4）
 
 | 任务 | 说明 |
 |------|------|
-| 多包 (SYN/ETB) 拼接重组 | SYN 单帧偏移已处理，不支持跨帧拼接（规约表18：6 位包总数/序列号） |
-| SL427 参数设置全量 AFN | 已完成 10H~20H/30H~31H；剩余查询类 50H~65H、复位 90H~96H、配置 A0H~A2H 等 |
-| SL427 查询类帧解码 | 当前下行参数/查询帧仅显示「下行报文」，未解析数据域 |
-| 模拟器 MQTT broker 联调 | 已覆盖内存/TCP 全链路；MQTT 需 mqtts CLI 环境 |
+| SL427 5CH 历史日记录响应 | 所给规约文本/PDF 正文未定义字段，暂以字节摘要显示 |
+| SL651 41H/42H/43H 参数标识符细化 | 当前按附录D 引导符列表构造，具体参数定义未全量收录 |
+| SL427 下行参数/查询帧解码 | 下行帧当前仅显示「下行报文」摘要，未回显命令数据域 |
+| 模拟器 MQTT broker 联调 | 已覆盖内存/TCP 全链路；MQTT 需 mqttx CLI 环境 |
 | ~~45H 状态位 32 位全量~~ | **不存在**：规约表58 仅定义 BIT0~BIT11，BIT12~31 为保留，当前 12 位实现与规约一致 |
 | ~~SL427 ASCII 编码帧~~ | **不存在**：SL427-2021 全文无 ASCII/字符编码，帧结构固定为 68H…16H 二进制 |

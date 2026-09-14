@@ -2,7 +2,7 @@
 
 > 角色：代码审计 2 代  
 > 接棒时间：2026-07-01  
-> 基线版本：v1.2.8  
+> 基线版本：v1.3.0  
 > 接手前必读：`docs/project.md` + `docs/handoff_main.md` + 本文档
 
 ---
@@ -353,7 +353,7 @@ requirements.txt          ← 依赖声明完整性
 ```bash
 # 验证当前基线
 cd /Users/wainshine/Workman/SL651/sl651-toolkit
-python3 tests/test_sl651.py                          # 53 项测试
+python3 tests/test_sl651.py                          # 57 项测试
 python3 tools/decode_cli.py sl651 --file examples/fujian_messages.txt  # 23 条
 python3 tools/decode_cli.py sl651 --file examples/beijing_messages.txt  # 25 条
 

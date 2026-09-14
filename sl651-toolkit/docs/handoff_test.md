@@ -2,7 +2,7 @@
 
 > 角色：业务测试1代  
 > 接棒时间：2026-07-01  
-> 基线版本：v1.2.8  
+> 基线版本：v1.3.0  
 > 接手前必读：`docs/project.md` + `README.md` + `docs/handoff_main.md` + 本文档
 
 ---
@@ -12,14 +12,16 @@
 ### 1.1 一次性运行结果
 
 ```
-53/53 项测试全部通过
+python tests/run_all.py → 8/8 套件通过
+  主套件 57 项 / 盲区 10 项 / 模拟器集成 5 组 / 变异 3 组
+  / SL427 参数 11 组 / 查询 20 组 / 控制 9 组 / SL651 多包 5 组
 福建 23 条真实报文 CRC + 要素级基线全通过
 北京 25 条真实报文 CRC + 要素级基线全通过
 ```
 
 ```bash
-python3 tests/test_sl651.py
-# 输出末尾: "所有测试通过"
+python3 tests/run_all.py          # 全部套件
+python3 tests/test_sl651.py       # 仅主套件（末尾 "所有测试通过"）
 ```
 
 ### 1.2 审计历史（已闭环）
@@ -28,7 +30,7 @@ python3 tests/test_sl651.py
 |------|----------|----------|----------|
 | v1.1~v1.7 | `audit/audit_report_v1.*.md` | 累计 ~20 项缺陷全部修复 | 24 项测试通过 |
 | **v1.8** | `audit/audit_report_v1.8.md` | **C-1: 模拟器引擎致命 bug (AttributeError)**, M-1: 小时报不校验, M-2: 充值量 BCD 字节序 | **v1.8 发现的全 6 项已修复** / 3 项盲区覆盖测试已新增 |
-| **v2.2** | `audit/audit_report_v2.2.md` | **C-1: 0x31 均匀报丢失 11/12 组**, M-1: F5 定义符失配截断, M-4: 真实报文仅验 CRC | **v1.2.7 已全部修复**；真实报文增加要素级基线（52 项测试） |
+| **v2.2** | `audit/audit_report_v2.2.md` | **C-1: 0x31 均匀报丢失 11/12 组**, M-1: F5 定义符失配截断, M-4: 真实报文仅验 CRC | **v1.2.7 已全部修复**；真实报文增加要素级基线（53 项测试） |
 
 ### 1.3 缺陷跟踪表（v1.8 基准，已全闭环）
 
@@ -39,7 +41,7 @@ python3 tests/test_sl651.py
 | M-2 | Medium | `sl427/encoder.py:238` | 充值量 BCD 大端→应为小端 LE | ✅ 已修复（`bytes(reversed(...))`） |
 | L-1 | Low | `tests/test_sl651.py:353` | `test_invalid_bcd_graceful` 无 assert | ✅ 已修复（加入 assert） |
 | L-2 | Low | `simulator/engine.py:110` | `add_station` 形参 `station_type` 死参数 | ✅ 已修复 |
-| L-3 | Low | `docs/project.md` §7.1 | 测试计数已同步为 **53 项**（v1.2.7） | ✅ 已同步 |
+| L-3 | Low | `docs/project.md` §7.1 | 测试计数已同步为 **57 项**（v1.2.7） | ✅ 已同步 |
 
 ---
 
@@ -75,7 +77,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 ## 三、测试用例清单
 
-### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 53 项清单见 `docs/project.md` §7.1）
+### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 57 项清单见 `docs/project.md` §7.1）
 
 | 序号 | 测试函数 | 协议 | 覆盖点 | 类型 |
 |------|----------|------|--------|------|
@@ -194,7 +196,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 | 条件 | 预期 | 验证方式 |
 |------|------|----------|
-| 53 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
+| 57 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
 | 福建 23 条 | CRC 100% + 要素级基线 | `python3 tools/decode_cli.py sl651 --file examples/fujian_messages.txt` |
 | 北京 25 条 | CRC 100% + 要素级基线 | `python3 tools/decode_cli.py sl651 --file examples/beijing_messages.txt` |
 | CRC16 验证向量 | `crc16(b"123456789") == 0x4B37` | test_crc |
@@ -212,7 +214,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 | P2-远期 | `sl427/constants.py:106` | COMP_BITS[3]=0x07 表示气象（含气压），非风速；v1.9 M-7 已修正 | 不影响解析 |
 | P2-远期 | Roadmap | 多包 (SYN/ETB) 拼接重组 | 当前可解码单帧多包 |
 | P2-远期 | Roadmap | SL427 参数设置全量 AFN (~30个变长格式) | 当前通用模板+6便捷方法 |
-| L-3 | `docs/project.md` §7.1 | 测试计数已同步为 53 项（v1.2.7） | 已解决 |
+| L-3 | `docs/project.md` §7.1 | 测试计数已同步为 57 项（v1.2.7） | 已解决 |
 
 ---
 

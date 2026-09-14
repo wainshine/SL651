@@ -266,6 +266,349 @@ def _parse_terminal(data: bytes) -> list[ElementValue]:
         ))
     return items
 
+def _bcd_le_signed(data: bytes) -> int:
+    """小端 BCD（末字节 D7 为符号位，1=负）-> 有符号整数。"""
+    if not data:
+        return 0
+    last = data[-1]
+    neg = bool(last & 0x80)
+    clean = bytes(data[:-1]) + bytes([last & 0x7F])
+    try:
+        v = bcd_bytes_to_int_le(clean)
+    except ValueError:
+        return 0
+    return -v if neg else v
+
+
+def _parse_flow_limit_427(seg: bytes) -> tuple[float, str]:
+    """解析 5B 流量参数（表20，小端 BCD，BYTE5 高半字节=符号/单位）。"""
+    if len(seg) < 5:
+        return 0.0, ""
+    high = seg[4]
+    sign = -1 if (high & 0xC0) == 0xC0 else 1
+    unit = "m³/h" if (high & 0x30) == 0x30 else "m³/s"
+    scaled = bcd_bytes_to_int_le(seg[:4]) + (high & 0x0F) * 10 ** 8
+    return sign * scaled / 1000.0, unit
+
+
+def _parse_switch_record_427(seg: bytes) -> str:
+    """解析 5B 中继切换时间（表32：分 时 日 星期月 年 BCD）。"""
+    if len(seg) < 5:
+        return bytes_to_hex_compact(seg)
+    minute = safe_bcd_to_int(seg[0])
+    hour = safe_bcd_to_int(seg[1])
+    day = safe_bcd_to_int(seg[2])
+    wm = seg[3]
+    month = wm & 0x1F
+    year = safe_bcd_to_int(seg[4])
+    if None in (minute, hour, day, year):
+        return f"无效时间({bytes_to_hex_compact(seg)})"
+    return f"20{year:02d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+
+
+def _parse_level_limits_427(seg: bytes) -> list[ElementValue]:
+    """解析 7B 水位基值/上下限（表15/16，小端 BCD，基值第3字节 D7 符号位）。"""
+    if len(seg) < 7:
+        return []
+    b0, b1, b2 = seg[0], seg[1], seg[2]
+    base_scaled = bcd_bytes_to_int_le(bytes([b0, b1, b2 & 0x7F]))
+    base = base_scaled / 100.0
+    if b2 & 0x80:
+        base = -base
+    lower = bcd_bytes_to_int_le(seg[3:5]) / 100.0
+    upper = bcd_bytes_to_int_le(seg[5:7]) / 100.0
+    return [
+        ElementValue(name="水位基值", value=base, unit="m",
+                     raw=bytes_to_hex_compact(seg[:3]), editable=False, decimal=2),
+        ElementValue(name="水位下限", value=lower, unit="m",
+                     raw=bytes_to_hex_compact(seg[3:5]), editable=False, decimal=2),
+        ElementValue(name="水位上限", value=upper, unit="m",
+                     raw=bytes_to_hex_compact(seg[5:7]), editable=False, decimal=2),
+    ]
+
+
+def _parse_pressure_limits_427(seg: bytes) -> list[ElementValue]:
+    """解析 8B 水压上/下限（表17，4B 小端 BCD ×2）。"""
+    if len(seg) < 8:
+        return []
+    upper = bcd_bytes_to_int_le(seg[:4]) / 100.0
+    lower = bcd_bytes_to_int_le(seg[4:8]) / 100.0
+    return [
+        ElementValue(name="水压上限", value=upper, unit="kPa",
+                     raw=bytes_to_hex_compact(seg[:4]), editable=False, decimal=2),
+        ElementValue(name="水压下限", value=lower, unit="kPa",
+                     raw=bytes_to_hex_compact(seg[4:8]), editable=False, decimal=2),
+    ]
+
+
+def _parse_water_quality_427(data: bytes) -> list[ElementValue]:
+    """解析水质参数种类及上/下限（表18，5B 位图 + N×4B 小端 BCD）。"""
+    out: list[ElementValue] = []
+    if len(data) < 5:
+        return out
+    mask = int.from_bytes(data[:5], "little")
+    body = data[5:]
+    idx = 0
+    for bit in range(40):
+        if (mask >> bit) & 1:
+            seg = body[idx * 4:idx * 4 + 4]
+            if len(seg) < 4:
+                break
+            name = C.WATER_QUALITY_PARAMS[bit] if bit < len(C.WATER_QUALITY_PARAMS) else f"参数{bit}"
+            out.append(ElementValue(name=name, value=bcd_bytes_to_int_le(seg),
+                                    unit="", raw=bytes_to_hex_compact(seg),
+                                    editable=False))
+            idx += 1
+    return out
+
+
+def _parse_channel_427(data: bytes) -> list[ElementValue]:
+    """解析主备信道类型及中心站地址（§7.2.24）。"""
+    out: list[ElementValue] = []
+    type_names = {0x01: "短信", 0x02: "IPV4", 0x03: "北斗卫星"}
+    addr_len = {0x01: 7, 0x02: 7, 0x03: 3}
+    pos = 0
+    for label in ("主信道", "备用信道"):
+        if pos >= len(data):
+            break
+        t = data[pos]
+        pos += 1
+        if t == 0xAA:
+            out.append(ElementValue(name=label, value="无", unit="",
+                                    raw="AA", editable=False))
+            pos += 1  # 0xAAAA 两字节
+            continue
+        n = addr_len.get(t, 0)
+        addr = data[pos:pos + n]
+        pos += n
+        out.append(ElementValue(
+            name=label,
+            value=f"{type_names.get(t, f'0x{t:02X}')} {bytes_to_hex_compact(addr)}",
+            unit="", raw=bytes_to_hex_compact(bytes([t]) + addr), editable=False,
+        ))
+    return out
+
+
+def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
+    """解析查询类响应帧（AFN=50H~65H，规约 7.3.2~7.3.21）。"""
+    out: list[ElementValue] = []
+    raw = bytes_to_hex_compact(data)
+
+    if afn_hex == "50":
+        if len(data) >= 5:
+            out.append(ElementValue(name="站点地址", value=_format_addr(data[:5]),
+                                    unit="", raw=bytes_to_hex_compact(data[:5]),
+                                    editable=False))
+    elif afn_hex == "51":
+        if len(data) >= 6:
+            out.append(ElementValue(name="站点时钟", value=_fmt_time_427(data[:6] + b"\x00"),
+                                    unit="", raw=bytes_to_hex_compact(data[:6]),
+                                    editable=False, is_time=True))
+    elif afn_hex == "52":
+        if len(data) >= 1:
+            mode = data[0]
+            name = {0: "兼容", 1: "自报", 2: "查询/应答", 3: "调试"}.get(mode, f"未知({mode})")
+            out.append(ElementValue(name="工作模式", value=name, unit="",
+                                    raw=f"{mode:02X}", editable=False))
+    elif afn_hex == "53":
+        if len(data) >= 2:
+            mask = data[0] | (data[1] << 8)
+            names = [C.RT_KINDS_REPORT[i] for i in range(16) if (mask >> i) & 1]
+            out.append(ElementValue(name="数据自报种类",
+                                    value="、".join(names) or "无",
+                                    unit="", raw=raw, editable=False))
+            for i in range((len(data) - 2) // 2):
+                iv = bcd_bytes_to_int_le(data[2 + i * 2:4 + i * 2])
+                label = C.RT_KINDS_REPORT[i] if i < len(C.RT_KINDS_REPORT) else f"#{i}"
+                out.append(ElementValue(name=f"自报间隔[{label}]", value=iv,
+                                        unit="min", raw=raw, editable=False))
+        else:
+            out.append(ElementValue(name="数据自报种类及间隔", value=f"{len(data)} 字节",
+                                    unit="bytes", raw=raw, editable=False))
+    elif afn_hex == "54":
+        if len(data) >= 2:
+            mask = data[0] | (data[1] << 8)
+            names = [C.CTRL_FUNC_MAP.get(i, {}).get("name", f"0x{i:02X}")
+                     for i in range(16) if (mask >> i) & 1]
+            out.append(ElementValue(name="实时数据种类", value="、".join(names) or "无",
+                                    unit="", raw=f"{mask:04X}", editable=False))
+    elif afn_hex == "55":
+        if len(data) >= 9:
+            out.append(ElementValue(name="最近充值量", value=bcd_bytes_to_int_le(data[:4]),
+                                    unit="m³", raw=bytes_to_hex_compact(data[:4]),
+                                    editable=False))
+            out.append(ElementValue(name="剩余水量", value=_bcd_le_signed(data[4:9]),
+                                    unit="m³", raw=bytes_to_hex_compact(data[4:9]),
+                                    editable=False))
+    elif afn_hex == "56":
+        if len(data) >= 8:
+            out.append(ElementValue(name="剩余水量报警值", value=bcd_bytes_to_int_le(data[:3]),
+                                    unit="m³", raw=bytes_to_hex_compact(data[:3]),
+                                    editable=False))
+            out.append(ElementValue(name="剩余水量", value=_bcd_le_signed(data[3:8]),
+                                    unit="m³", raw=bytes_to_hex_compact(data[3:8]),
+                                    editable=False))
+    elif afn_hex == "5e":
+        if len(data) >= 4:
+            out.extend(_parse_alarm(data[:2]))
+            out.extend(_parse_terminal(data[2:4]))
+    elif afn_hex == "5f":
+        labels = [("A相电压", "V"), ("B相电压", "V"), ("C相电压", "V"),
+                  ("A相电流", "A"), ("B相电流", "A"), ("C相电流", "A")]
+        for i, (lab, unit) in enumerate(labels):
+            seg = data[i * 2:i * 2 + 2]
+            if len(seg) == 2:
+                out.append(ElementValue(name=lab, value=int.from_bytes(seg, "little"),
+                                        unit=unit, raw=bytes_to_hex_compact(seg),
+                                        editable=False))
+    elif afn_hex == "60":
+        if data:
+            out.append(ElementValue(name="中继引导码长值", value=data[0], unit="s",
+                                    raw=f"{data[0]:02X}", editable=False))
+    elif afn_hex == "62":
+        n = len(data) // 5
+        for i in range(n):
+            seg = data[i * 5:i * 5 + 5]
+            out.append(ElementValue(name=f"转发站地址[{i + 1}]", value=_format_addr(seg),
+                                    unit="", raw=bytes_to_hex_compact(seg),
+                                    editable=False))
+    elif afn_hex == "5d":
+        n = min(len(data) // 2, len(C.EVENT_RECORDS))
+        for i in range(n):
+            seg = data[i * 2:i * 2 + 2]
+            cnt = int.from_bytes(seg, "little")
+            out.append(ElementValue(name=f"事件记录[{C.EVENT_RECORDS[i]}]", value=cnt,
+                                    unit="次", raw=bytes_to_hex_compact(seg),
+                                    editable=False))
+    elif afn_hex == "57":
+        # N×7B 水位基值/上下限 + 4B 终端机报警状态
+        if len(data) >= 4:
+            body, tail = data[:-4], data[-4:]
+            for i in range(len(body) // 7):
+                for e in _parse_level_limits_427(body[i * 7:i * 7 + 7]):
+                    e.name = f"{e.name}[{i + 1}]"
+                    out.append(e)
+            out.extend(_parse_alarm(tail[:2]))
+            out.extend(_parse_terminal(tail[2:4]))
+    elif afn_hex == "58":
+        # N×8B 水压上/下限 + 4B 终端机报警状态
+        if len(data) >= 4:
+            body, tail = data[:-4], data[-4:]
+            for i in range(len(body) // 8):
+                for e in _parse_pressure_limits_427(body[i * 8:i * 8 + 8]):
+                    e.name = f"{e.name}[{i + 1}]"
+                    out.append(e)
+            out.extend(_parse_alarm(tail[:2]))
+            out.extend(_parse_terminal(tail[2:4]))
+    elif afn_hex in ("59", "5a"):
+        out.extend(_parse_water_quality_427(data))
+    elif afn_hex == "65":
+        out.extend(_parse_channel_427(data))
+    elif afn_hex == "63":
+        if len(data) >= 2:
+            b1, b2 = data[0], data[1]
+            out.append(ElementValue(name="中继自动切换/自报", value=f"0x{b1:02X}",
+                                    unit="", raw=f"{b1:02X}", editable=False))
+            flags = [
+                (0, "工作机A机", {1: "正常", 0: "故障"}),
+                (1, "工作机B机", {1: "正常", 0: "故障"}),
+                (2, "值班机", {1: "A机", 0: "B机"}),
+                (3, "转发", {1: "允许", 0: "不允许"}),
+                (4, "电源", {1: "报警", 0: "正常"}),
+                (5, "中继", {1: "故障报警", 0: "正常"}),
+            ]
+            for bit, name, mp in flags:
+                out.append(ElementValue(name=f"中继状态[{name}]",
+                                        value=mp.get((b2 >> bit) & 1, "-"),
+                                        unit="", raw=f"{b2:02X}", editable=False))
+            rec = data[2:]
+            for i in range(len(rec) // 5):
+                seg = rec[i * 5:i * 5 + 5]
+                out.append(ElementValue(name=f"切换记录[{i + 1}]",
+                                        value=_parse_switch_record_427(seg),
+                                        unit="", raw=bytes_to_hex_compact(seg),
+                                        editable=False, is_time=True))
+    elif afn_hex == "64":
+        # 流量参数上限 N×5B + 报警(2B)+状态(2B)
+        if len(data) >= 4:
+            body, tail = data[:-4], data[-4:]
+            n = len(body) // 5
+            for i in range(n):
+                seg = body[i * 5:i * 5 + 5]
+                val, unit = _parse_flow_limit_427(seg)
+                out.append(ElementValue(name=f"流量上限[{i + 1}]", value=val,
+                                        unit=unit, raw=bytes_to_hex_compact(seg),
+                                        editable=False))
+            out.extend(_parse_alarm(tail[:2]))
+            out.extend(_parse_terminal(tail[2:4]))
+    else:
+        out.append(ElementValue(name="查询响应数据", value=f"{len(data)} 字节",
+                                unit="bytes", raw=raw, editable=False))
+    return out
+
+
+def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
+    """解析控制命令响应帧（AFN=90H~96H，规约 7.4）与配置响应（A0H~A2H）。"""
+    out: list[ElementValue] = []
+    raw = bytes_to_hex_compact(data)
+
+    if afn_hex == "90":
+        if data:
+            txt = "执行完毕" if data[0] == 0x5A else f"0x{data[0]:02X}"
+            out.append(ElementValue(name="复位响应", value=txt, unit="", raw=raw,
+                                    editable=False))
+    elif afn_hex == "91":
+        if data:
+            names = [n for bit, n in ((0, "雨量"), (1, "水位"), (2, "水量"))
+                     if (data[0] >> bit) & 1]
+            out.append(ElementValue(name="清空历史数据", value="、".join(names) or "无",
+                                    unit="", raw=raw, editable=False))
+    elif afn_hex in ("92", "93"):
+        if data:
+            code = data[0] & 0x0F
+            is_valve = ((data[0] >> 4) & 0x0F) == 0x0F
+            done = ((data[0] >> 4) & 0x0F) == 0x0A
+            kind = "阀门/闸门" if is_valve else "水泵"
+            act = "启动" if afn_hex == "92" else "关闭"
+            txt = f"{kind}编号{code}" + (" 执行完毕" if done else "")
+            out.append(ElementValue(name=f"{act}响应", value=txt, unit="", raw=raw,
+                                    editable=False))
+    elif afn_hex in ("94", "95"):
+        if data:
+            low = data[0] & 0x0F
+            m = "A机" if low == 0x09 else ("B机" if low == 0x06 else f"0x{low:02X}")
+            out.append(ElementValue(name="切换响应", value=m, unit="", raw=raw,
+                                    editable=False))
+    elif afn_hex == "96":
+        if len(data) >= 2:
+            out.append(ElementValue(name="密码设置响应",
+                                    value=bcd_bytes_to_int_le(data[:2]),
+                                    unit="", raw=raw, editable=False))
+    elif afn_hex == "a0":
+        if len(data) >= 2:
+            mask = data[0] | (data[1] << 8)
+            names = [C.RT_KINDS_QUERY[i] for i in range(16) if (mask >> i) & 1]
+            out.append(ElementValue(name="需查询的实时数据种类",
+                                    value="、".join(names) or "无",
+                                    unit="", raw=raw, editable=False))
+    elif afn_hex == "a1":
+        if len(data) >= 2:
+            mask = data[0] | (data[1] << 8)
+            names = [C.RT_KINDS_REPORT[i] for i in range(16) if (mask >> i) & 1]
+            out.append(ElementValue(name="数据自报种类",
+                                    value="、".join(names) or "无",
+                                    unit="", raw=raw, editable=False))
+            for i in range((len(data) - 2) // 2):
+                iv = bcd_bytes_to_int_le(data[2 + i * 2:4 + i * 2])
+                label = C.RT_KINDS_REPORT[i] if i < len(C.RT_KINDS_REPORT) else f"#{i}"
+                out.append(ElementValue(name=f"自报间隔[{label}]", value=iv,
+                                        unit="min", raw=raw, editable=False))
+    elif afn_hex == "a2":
+        out.append(ElementValue(name="主备信道配置", value=raw, unit="",
+                                raw=raw, editable=False))
+    return out
+
+
 def _fmt_time_427(data: bytes) -> str:
     """Tp 时间标签（6.3.3.8）：前6B BCD(秒分时日月年) + 第7B BIN允许传输延时时长(min)。"""
 
@@ -558,6 +901,15 @@ class SL427Decoder:
                 self._warnings.append(
                     f"AFN=84H 数据域仅 {len(data_field)} 字节，不足 2B 电压，无法解析"
                 )
+
+        elif afn_hex in (
+            "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
+            "5a", "5c", "5d", "5e", "5f", "60", "62", "63", "64", "65",
+        ):
+            elements.extend(_parse_query_response(afn_hex, data_field))
+
+        elif afn_hex in ("90", "91", "92", "93", "94", "95", "96", "a0", "a1", "a2"):
+            elements.extend(_parse_control_response(afn_hex, data_field))
 
         elif afn_hex == "ff":
             # FFH 用户自定义扩展：按 AFN_TP_ONLY 声明含尾部 Tp(7B)，剥离后再解析数据域

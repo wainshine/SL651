@@ -20,6 +20,9 @@ SUITES = [
     ("模拟器集成 (test_simulator_integration.py)", HERE / "test_simulator_integration.py"),
     ("解码器变异 (test_fuzz_decoders.py)", HERE / "test_fuzz_decoders.py"),
     ("SL427 参数 AFN (test_sl427_param_afn.py)", HERE / "test_sl427_param_afn.py"),
+    ("SL427 查询 AFN (test_sl427_query_afn.py)", HERE / "test_sl427_query_afn.py"),
+    ("SL427 控制 AFN (test_sl427_control_afn.py)", HERE / "test_sl427_control_afn.py"),
+    ("SL651 多包重组 (test_sl651_multipacket.py)", HERE / "test_sl651_multipacket.py"),
 ]
 
 

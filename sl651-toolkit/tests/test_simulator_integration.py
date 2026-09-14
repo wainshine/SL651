@@ -156,6 +156,33 @@ def test_tcp_sender_end_to_end() -> None:
     print(f"    TCP 收到 {len(received[0])} 字节, 解码通过")
 
 
+def test_rain_total_accum_nonresetting() -> None:
+    """0x26 降水量累计值为不归零累计，跨日不重置（C5）。"""
+    station = RainStation("1234567892")
+    station.rain_gen.raining = True
+    station.rain_gen.rain_intensity = 1.0
+    station.rain_gen.rain_remaining_minutes = 10 ** 9
+
+    def _elem(code: int, tick: int) -> float:
+        station.tick = tick
+        for g, v, _l, _d in station.generate_elements():
+            if g == code:
+                return v
+        raise AssertionError(f"未生成要素 0x{code:02X}")
+
+    # 同日多次
+    v1 = _elem(0x26, 0)
+    v2 = _elem(0x26, 100)
+    assert v2 >= v1 > 0, f"累计值应递增: {v1} -> {v2}"
+    # 跨日：日降水量归零，累计值不归零
+    daily_before = _elem(0x1F, 1439)
+    daily_after = _elem(0x1F, 2880)
+    total_after = _elem(0x26, 2880)
+    assert daily_after < daily_before, "日降水量应跨日归零"
+    assert total_after >= v2, f"累计值跨日不应重置: {v2} -> {total_after}"
+    print(f"    0x26 不归零累计 OK (日:{daily_before}->{daily_after}, 累计:{v1}->{total_after})")
+
+
 def main() -> int:
     print("=" * 60)
     print("模拟器端到端集成测试")
@@ -165,6 +192,7 @@ def main() -> int:
         ("引擎雨量加报边沿", test_engine_rain_alert_edge),
         ("引擎站点注册", test_engine_add_station),
         ("TcpSender 端到端", test_tcp_sender_end_to_end),
+        ("0x26 不归零累计", test_rain_total_accum_nonresetting),
     ]
     for name, fn in tests:
         print(f">>> {name}")

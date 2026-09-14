@@ -49,6 +49,7 @@ class RainGenerator:
     rain_remaining_minutes: int = 0  # 当前降雨过程剩余分钟
     daily_accum: float = 0.0  # 日累计
     hourly_accum: float = 0.0  # 小时累计
+    total_accum: float = 0.0  # 不归零累计（0x26 降水量累计值，N(6,1)）
     last_hour_tick: int = -1
     last_day_tick: int = -1
 
@@ -88,6 +89,10 @@ class RainGenerator:
         increment = self.rain_intensity  # 每分钟增量
         self.daily_accum += increment
         self.hourly_accum += increment
+        self.total_accum += increment
+        # 累计值上限 99999.9mm（N(6,1) 6 位），超出后归零（计数器翻转）
+        if self.total_accum > 99999.9:
+            self.total_accum = 0.0
 
         return (
             round(self.daily_accum, 1),

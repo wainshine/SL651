@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.8
+# SL651 水文规约工具包 v1.3.0
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -45,14 +45,23 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── test_sl651.py           # 53 项自测
-│   └── test_round1_blindspots.py  # 10 项盲区测试
+│   ├── run_all.py              # 统一测试入口（8 套件）
+│   ├── test_sl651.py           # 主测试 57 项
+│   ├── test_round1_blindspots.py    # 盲区测试 10 项
+│   ├── test_simulator_integration.py # 模拟器端到端集成
+│   ├── test_fuzz_decoders.py   # 解码器变异/流式健壮性
+│   ├── test_sl427_param_afn.py # SL427 参数 AFN 16H~20H
+│   ├── test_sl427_query_afn.py # SL427 查询 AFN 50H~65H
+│   ├── test_sl427_control_afn.py # SL427 控制/配置 AFN 90H~A2H
+│   └── test_sl651_multipacket.py # SL651 多包 SYN/ETB 重组
 ├── docs/
 │   └── project.md              # 项目规格说明书
-├── audit/                      # 审计报告 v1.1~v2.1
+├── audit/                      # 审计报告 v1.1~v2.2
 ├── requirements.txt            # PyYAML>=6.0 + flask
 └── README.md
 ```
+
+> 仓库根另有 `.github/workflows/ci.yml`（CI，Python 3.10/3.11/3.12）。
 
 ## 环境要求
 
@@ -126,6 +135,11 @@ print(r.station_addr, r.function_name, r.tx_time_display)
 for e in r.elements:
     print(f"  [{e.code}] {e.name}: {e.display_value}")
 
+# SL651 流式解析 + 多包 (SYN/ETB) 自动重组
+dec = SL651Decoder()
+for msg in dec.feed(stream_bytes):   # 可分多次喂入
+    print(msg.function_name, len(msg.elements))
+
 # SL427
 r = SL427Decoder().decode_hex("68...")
 print(r.afn_name, r.direction)
@@ -144,11 +158,18 @@ for e in r.elements:
 | `build_timing_frame(elements)` | 0x32 | 上行 | ETX | 定时报 |
 | `build_alarm_frame(elements)` | 0x33 | 上行 | ETX | 加报报 |
 | `build_hourly_frame(levels, inst, v)` | 0x34 | 上行 | ETX | 小时报（含 12×F5 水位） |
+| `build_test_frame(elements)` | 0x30 | 上行 | ETX | 测试报（正文同定时报） |
 | `build_link_maintain_frame()` | 0x2F | 上行 | ETX | 链路维持 |
 | `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ASCII 编码（SOH 起始） |
 | `build_query_frame()` | 0x37 | 下行 | ENQ | 查询所有实时数据 |
+| `build_downlink_query(func)` | 任意 | 下行 | ENQ | 通用空正文下行查询 |
+| `build_query_pump_data()` 等 | 44/45/46/50/51 | 下行 | ENQ | 水泵/版本/状态/事件/时钟查询 |
 | `build_query_body(guides)` | 0x3A | 下行 | ENQ | 查询指定要素（正文含引导符） |
-| `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | 参数设置 |
+| `build_manual_frame(payload)` | 0x35 | 上行 | ETX | 人工置数报 |
+| `build_init_solid_storage()` | 0x47 | 下行 | ENQ | 初始化固态存储 |
+| `build_change_password_frame(old, new)` | 0x49 | 下行 | ENQ | 修改密码 |
+| `build_set_param_frame(params, function_code=0x40)` | 0x40/0x42 | 下行 | ENQ | 参数设置/修改运行参数 |
+| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 下行 | ENQ | 读取基本配置/运行参数 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | 恢复出厂 |
 | `build_frame(function_code, body, ...)` | 任意 | 任意 | 可指定 | 通用帧构造（正文 >4095 抛 EncodeError） |
@@ -229,11 +250,12 @@ python web/app.py
 python tests/run_all.py
 
 # 或单独运行
-python tests/test_sl651.py            # 53 项主测试
+python tests/test_sl651.py            # 57 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- 主套件 53 项 + 盲区 10 项全部通过；23 条福建 + 25 条北京真实报文 CRC + 要素级验证
+- `run_all.py` 共 8 套件：主套件 57 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 3 组 + SL427 参数 11 组 + 查询 20 组 + 控制 9 组 + SL651 多包 5 组
+- 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
@@ -250,6 +272,16 @@ python tests/test_round1_blindspots.py  # 10 项盲区测试
   - L: 加报边沿测试驱动真实 `_run`；无效 BCD 降级断言强化；SL427 短数据域降级；地址方式判定文档化；死常量标注；PW key1/溢出校验
   - 收尾: SL427 `DecodedMessage` 增加 `warnings` 通道（短数据域降级可见）；0x31 ASCII 均匀报识别时间步长码 `DRxnn` 并支持单标识符多值数组
   - 文档一致性 D-1~D-11 修正；测试 44 → 53 项
+
+- **v1.3.0**：SL427 全 AFN + SL651 编码器补全 + 多包重组
+  - 功能: SL427 查询类 AFN 50H~65H 查询帧构造 + 响应解析（地址/时钟/模式/水量/状态/水泵/中继等）
+  - 功能: SL427 控制/配置 AFN 90H~96H、A0H~A2H（复位/清空/启停泵/切换/改密/实时种类/自报种类/主备信道）
+  - 功能: SL427 查询响应补齐 53/57/58/59/5A/5D/63/64/65H（自报种类/水位/水压/水质/事件/中继/流量/信道）
+  - 功能: SL427 `AFN_MAP` 扩至 61 项，新增参数种类/事件记录/水质参数表；补 5CH 历史日记录查询帧（响应字段规约未定义，暂以字节摘要显示）
+  - 功能: SL651 多包 SYN/ETB 流式重组 `SL651Decoder.feed()`（表22：包总数/序列号，支持乱序/增量/垃圾字节）
+  - 功能: SL651 编码器补 0x30 测试报、0x35 人工置数报、41H/42H/43H 配置、44H/45H/46H/50H/51H 查询、47H 初始化固态、49H 修改密码 + 通用 `build_downlink_query`
+  - 修复: 模拟器 0x26 降水量累计值改为不归零累计（原用日累计近似，代码 TODO 闭环）
+  - 测试: 主套件 53 → 57 项；辅助套件 4 → 7（新增 SL427 参数/查询/控制 AFN、SL651 多包重组）；`run_all.py` 8/8
 
 - **v1.2.8**：工程化 + 测试深度 + SL427 参数 AFN 扩展
   - 工程化: 统一测试入口 `tests/run_all.py` + GitHub Actions CI（Python 3.10/3.11/3.12）

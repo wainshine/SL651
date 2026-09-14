@@ -2,7 +2,7 @@
 
 ## 概述
 
-核心协议库。提供 SL651-2014 报文的编解码能力，支持 HEX/BCD 和 ASCII 两种编码，编码器覆盖上行 4 种（2F/32/33/34）+ 下行 4 种（37/40/48/4A）功能码（另含 3AH 查询正文构造）。
+核心协议库。提供 SL651-2014 报文的编解码能力，支持 HEX/BCD 和 ASCII 两种编码。编码器覆盖上行 6 种（2F/30/32/33/34/35）+ 下行 14 种（37/40/41/42/43/44/45/46/47/48/49/4A/50/51），另含 3AH 查询正文构造与多包 SYN/ETB 流式重组。
 
 ## 文件清单
 
@@ -11,8 +11,8 @@
 | `bcd.py` | BCD 编解码（大端/小端）、时间编解码、hex↔bytes 转换 |
 | `crc.py` | CRC-16/MODBUS（0xA001，初值 0xFFFF）、CRC8（0xE5，供 sl427 使用） |
 | `constants.py` | 协议常量：101 项 `SL651_ELEMENTS`、102 项 `SL651_ASCII_ELEMENTS`、FF 子标识符、FUNC_MAP（23 项）、STATION_TYPE（11 类）、STATUS_BITS（12 bit）、帧偏移常量 |
-| `decoder.py` | 报文解码器：定义符动态解析、ASCII 帧解析、状态位解码、CRC 校验 |
-| `encoder.py` | 报文编码器：上行 5 类 + 下行 4 类 + ASCII 编码 + 通用帧构造 |
+| `decoder.py` | 报文解码器：定义符动态解析、ASCII 帧解析、状态位解码、CRC 校验、`feed()` 流式解析与多包 SYN/ETB 重组 |
+| `encoder.py` | 报文编码器：上行 6 类 + 下行 14 类 + ASCII 编码 + 通用帧构造 |
 
 ## 核心 API
 
@@ -24,6 +24,9 @@ from sl651 import SL651Decoder
 decoder = SL651Decoder()
 r = decoder.decode_hex("7E7E...")  # hex 字符串
 r = decoder.decode(frame_bytes)    # bytes
+
+# 流式解析 + 多包 (SYN/ETB) 自动重组（可分多次喂入，支持乱序）
+msgs = decoder.feed(chunk_bytes)   # -> list[DecodedMessage]
 ```
 
 **返回**: `DecodedMessage` 数据类，主要字段：
@@ -72,13 +75,20 @@ enc = SL651Encoder(
 | 方法 | 功能码 | 说明 |
 |------|--------|------|
 | `build_timing_frame(elements, obs_time, function_code=0x32)` | 0x32 | 定时报 |
+| `build_test_frame(elements, obs_time)` | 0x30 | 测试报（正文同定时报） |
 | `build_alarm_frame(elements, obs_time)` | 0x33 | 加报报 |
 | `build_hourly_frame(water_levels, inst_level, voltage, obs_time)` | 0x34 | 小时报（含 12×F5 数组） |
 | `build_link_maintain_frame()` | 0x2F | 链路维持 |
 | `build_ascii_frame(elements, obs_time)` | 0x32 | ASCII 编码（SOH 起始） |
 | `build_query_frame()` | 0x37 | 下行查询所有实时数据（空正文，结束符 ENQ） |
+| `build_downlink_query(func)` | 任意 | 通用空正文下行查询 |
+| `build_query_pump_data/software_version/status_alarm/event_record/clock()` | 44/45/46/50/51 | 无参数体下行查询 |
 | `build_query_body(element_guides)` | 3AH | 下行查询指定要素（正文含引导符） |
-| `build_set_param_frame(params)` | 0x40 | 下行参数设置（结束符 ENQ） |
+| `build_manual_frame(payload)` | 0x35 | 人工置数报（F2 标识符 + 原编码） |
+| `build_init_solid_storage()` | 0x47 | 初始化固态存储（97H 标识符） |
+| `build_change_password_frame(old, new)` | 0x49 | 修改密码（03H 标识符） |
+| `build_set_param_frame(params, function_code=0x40)` | 0x40/0x42 | 下行参数设置/修改运行参数（结束符 ENQ） |
+| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 读取基本配置/运行参数 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行时钟校准（结束符 ENQ） |
 | `build_reset_frame()` | 0x48 | 下行恢复出厂（结束符 ENQ） |
 | `build_frame(function_code, body, direction, ascii_mode, end_marker, tx_time)` | 任意 | 通用帧构造 |

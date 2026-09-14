@@ -8,9 +8,9 @@
 
 | 文件 | 说明 |
 |------|------|
-| `constants.py` | 协议常量：AFN 表（30 项）、控制功能码表（16 种）、告警/终端状态位、`parse_ctrl`/`make_ctrl` |
-| `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派数据解析 |
-| `encoder.py` | 68H 帧编码器：自报 5 类 + 参数设置 6 类 + 通用模板 |
+| `constants.py` | 协议常量：AFN 表（61 项）、控制功能码表（16 种）、告警/终端状态位、参数种类/事件记录/水质参数表、`parse_ctrl`/`make_ctrl` |
+| `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派数据解析（含 50H~65H/90H~96H/A0H~A2H 响应） |
+| `encoder.py` | 68H 帧编码器：自报 5 类 + 参数设置 17 类 + 查询 17 类 + 控制 7 类 + 配置 3 类 + 通用模板 |
 
 ## 核心 API
 
@@ -77,6 +77,18 @@ enc = SL427Encoder(addr)
 | `build_set_relay_auto_switch(value, pw)` | 0x1E | 中继自动切换/自报（1B BIN） |
 | `build_set_flow_limits(points, pw)` | 0x1F | 流量参数上限值（每点 5B） |
 | `build_set_report_threshold(category, index, interval_min, threshold, pw)` | 0x20 | 启报阈值及固态存储间隔 |
+| `build_query(afn, data, func_code)` | 50H~65H | 通用查询帧（无 AUX） |
+| `build_query_addr/clock/work_mode/report_kinds/realtime_kinds/recharge/remaining_alarm/event_record/status_alarm/pump_data/relay_code_len/relay_addr/relay_status/flow_limits/channel` | 50H~65H | 查询类便捷方法 |
+| `build_query_image(image_no)` | 0x61 | 查询实时图像 |
+| `build_query_history_daily()` | 0x5C | 查询历史日记录（响应字段规约未定义，仅查询帧） |
+| `build_reset(factory_reset, pw)` | 0x90 | 复位终端参数和状态 |
+| `build_clear_history(rain, level, water, pw)` | 0x91 | 清空历史数据单元 |
+| `build_start_pump/stop_pump(code, is_valve, pw)` | 0x92/0x93 | 启停水泵/阀门 |
+| `build_switch_comm/switch_relay_work(machine, pw)` | 0x94/0x95 | 切换通信机/中继工作机 |
+| `build_change_password(password, pw)` | 0x96 | 修改终端密码 |
+| `build_set_realtime_kinds(mask, pw)` | 0xA0 | 设置需查询实时种类 |
+| `build_set_report_kinds(mask, intervals, pw)` | 0xA1 | 设置自报种类及间隔 |
+| `build_set_channel(main_type, main_addr, ...)` | 0xA2 | 设置主备信道及中心地址 |
 | `build_set_ic_card_on(pw)` | 0x30 | IC卡功能有效 |
 | `build_set_ic_card_off(pw)` | 0x31 | 取消IC卡功能 |
 | `build_param_set_frame(afn, func_code, data, pw, tp, key1)` | 10~4F | 通用参数设置模板 |

@@ -434,6 +434,185 @@ class SL427Encoder:
             data.extend(b)
         return self.build_param_set_frame(0x1F, 0x00, bytes(data), pw)
 
+    # ------------------------------------------------------------------
+    # 参数查询便捷方法 (AFN=50H~65H，规约 7.3.2~7.3.21)
+    # 查询帧无附加信息域（AUX），结束符 16H
+    # ------------------------------------------------------------------
+
+    def build_query(self, afn: int, data: bytes = b"", func_code: int = 0) -> bytes:
+        """通用查询帧（下行，无 PW/Tp）。"""
+        ctrl = C.make_ctrl(dir_=0, func_code=func_code)
+        return self.build_frame(afn, ctrl, data)
+
+    def build_query_addr(self) -> bytes:
+        """查询站点地址 (AFN=50H)。"""
+        return self.build_query(0x50)
+
+    def build_query_clock(self) -> bytes:
+        """查询站点时钟 (AFN=51H)。"""
+        return self.build_query(0x51)
+
+    def build_query_work_mode(self) -> bytes:
+        """查询工作模式 (AFN=52H)。"""
+        return self.build_query(0x52)
+
+    def build_query_report_kinds(self) -> bytes:
+        """查询数据自报种类及时间间隔 (AFN=53H)。"""
+        return self.build_query(0x53)
+
+    def build_query_realtime_kinds(self) -> bytes:
+        """查询需查询的实时数据种类 (AFN=54H)。"""
+        return self.build_query(0x54)
+
+    def build_query_recharge(self) -> bytes:
+        """查询最近充值量及剩余水量 (AFN=55H)。"""
+        return self.build_query(0x55)
+
+    def build_query_remaining_alarm(self) -> bytes:
+        """查询剩余水量及报警值 (AFN=56H)。"""
+        return self.build_query(0x56)
+
+    def build_query_event_record(self) -> bytes:
+        """查询事件记录 (AFN=5DH)。"""
+        return self.build_query(0x5D)
+
+    def build_query_status_alarm(self) -> bytes:
+        """查询状态和报警状态 (AFN=5EH)。"""
+        return self.build_query(0x5E)
+
+    def build_query_pump_data(self) -> bytes:
+        """查询水泵电机实时工作数据 (AFN=5FH)。"""
+        return self.build_query(0x5F)
+
+    def build_query_relay_code_len(self) -> bytes:
+        """查询转发中继引导码长值 (AFN=60H)。"""
+        return self.build_query(0x60)
+
+    def build_query_image(self, image_no: int) -> bytes:
+        """查询实时图像 (AFN=61H)，数据域 1B 图片编号（§7.3.17）。"""
+        if not 0 <= image_no <= 0xFF:
+            raise EncodeError(f"图片编号超范围(0~255): {image_no}")
+        return self.build_query(0x61, bytes([image_no]))
+
+    def build_query_relay_addr(self) -> bytes:
+        """查询中继站转发监测站地址 (AFN=62H)。"""
+        return self.build_query(0x62)
+
+    def build_query_relay_status(self) -> bytes:
+        """查询中继站状态和切换记录 (AFN=63H)。"""
+        return self.build_query(0x63)
+
+    def build_query_flow_limits(self) -> bytes:
+        """查询流量参数上限值 (AFN=64H)。"""
+        return self.build_query(0x64)
+
+    def build_query_channel(self) -> bytes:
+        """查询主备信道类型及中心站地址 (AFN=65H)。"""
+        return self.build_query(0x65)
+
+    def build_query_history_daily(self) -> bytes:
+        """查询终端机历史日记录 (AFN=5CH)。
+
+        注：所提供的 SL427-2021 规约文本/PDF 正文未给出 5CH 响应字段定义
+        （仅前言提及），故仅实现查询帧；响应暂以字节摘要显示。
+        """
+        return self.build_query(0x5C)
+
+    # ------------------------------------------------------------------
+    # 控制命令 (AFN=90H~96H，规约 7.4，AUX=PW+Tp)
+    # ------------------------------------------------------------------
+
+    def build_reset(self, factory_reset: bool = False, pw: int = 0) -> bytes:
+        """复位终端参数和状态 (AFN=90H)。factory_reset=True 恢复出厂默认值（§7.4.2）。"""
+        code = 0x02 if factory_reset else 0x01
+        return self.build_param_set_frame(0x90, 0x00, bytes([code]), pw)
+
+    def build_clear_history(
+        self, rain: bool = False, level: bool = False, water: bool = False,
+        pw: int = 0,
+    ) -> bytes:
+        """清空历史数据单元 (AFN=91H)。D0雨量/D1水位/D2水量（§7.4.3）。"""
+        mask = (1 if rain else 0) | (2 if level else 0) | (4 if water else 0)
+        return self.build_param_set_frame(0x91, 0x00, bytes([mask]), pw)
+
+    def _pump_cmd(self, afn: int, code: int, is_valve: bool, pw: int) -> bytes:
+        if not 0 <= code <= 15:
+            raise EncodeError(f"水泵/阀门编号超范围(0~15): {code}")
+        b = (code & 0x0F) | (0xF0 if is_valve else 0x00)
+        return self.build_param_set_frame(afn, 0x00, bytes([b]), pw)
+
+    def build_start_pump(self, code: int, is_valve: bool = False, pw: int = 0) -> bytes:
+        """启动水泵或阀门/闸门 (AFN=92H，§7.4.4)。"""
+        return self._pump_cmd(0x92, code, is_valve, pw)
+
+    def build_stop_pump(self, code: int, is_valve: bool = False, pw: int = 0) -> bytes:
+        """关闭水泵或阀门/闸门 (AFN=93H，§7.4.5)。"""
+        return self._pump_cmd(0x93, code, is_valve, pw)
+
+    def _switch_machine(self, afn: int, machine: str, pw: int) -> bytes:
+        m = machine.upper()
+        if m not in ("A", "B"):
+            raise EncodeError(f"值班机只能为 'A'/'B': {machine!r}")
+        low = 0x09 if m == "A" else 0x06
+        return self.build_param_set_frame(afn, 0x00, bytes([0xA0 | low]), pw)
+
+    def build_switch_comm(self, machine: str = "A", pw: int = 0) -> bytes:
+        """切换监测站/中继站通信机 (AFN=94H，§7.4.6)。"""
+        return self._switch_machine(0x94, machine, pw)
+
+    def build_switch_relay_work(self, machine: str = "A", pw: int = 0) -> bytes:
+        """切换中继站工作机 (AFN=95H，§7.4.7)。"""
+        return self._switch_machine(0x95, machine, pw)
+
+    def build_change_password(self, password: int, pw: int = 0) -> bytes:
+        """修改监测终端机密码 (AFN=96H)，2B BCD 小端（表51，§7.4.8）。"""
+        if not 0 <= password <= 9999:
+            raise EncodeError(f"密码超范围(0~9999): {password}")
+        return self.build_param_set_frame(0x96, 0x00, _bcd_le(password, 2), pw)
+
+    # ------------------------------------------------------------------
+    # 配置 (AFN=A0H~A2H，规约 7.2.22~7.2.24，AUX=PW+Tp)
+    # ------------------------------------------------------------------
+
+    def build_set_realtime_kinds(self, mask: int, pw: int = 0) -> bytes:
+        """设置需查询的实时数据种类 (AFN=A0H)，2B BIN 位图（表23）。"""
+        if not 0 <= mask <= 0xFFFF:
+            raise EncodeError(f"实时数据种类位图超范围(0~0xFFFF): {mask}")
+        return self.build_param_set_frame(0xA0, 0x00, mask.to_bytes(2, "little"), pw)
+
+    def build_set_report_kinds(
+        self, mask: int, intervals: list[int], pw: int = 0
+    ) -> bytes:
+        """设置数据自报种类及时间间隔 (AFN=A1H)，2B 位图 + N×2B BCD 间隔（表24/25）。
+
+        intervals: 按参数顺序的自报间隔(min)，每项 1~9999；长度 ≤15。
+        """
+        if not 0 <= mask <= 0xFFFF:
+            raise EncodeError(f"自报种类位图超范围(0~0xFFFF): {mask}")
+        if len(intervals) > 15:
+            raise EncodeError(f"自报间隔最多 15 项，当前 {len(intervals)}")
+        data = bytearray(mask.to_bytes(2, "little"))
+        for iv in intervals:
+            if not 1 <= iv <= 9999:
+                raise EncodeError(f"自报间隔超范围(1~9999 min): {iv}")
+            data.extend(_bcd_le(iv, 2))
+        return self.build_param_set_frame(0xA1, 0x00, bytes(data), pw)
+
+    def build_set_channel(
+        self, main_type: int, main_addr: bytes,
+        backup_type: int = 0xAA, backup_addr: bytes = b"\xAA", pw: int = 0,
+    ) -> bytes:
+        """设置主备信道类型及中心站地址 (AFN=A2H，§7.2.24）。
+
+        main_type/backup_type: 01短信/02IPV4/03北斗；无备用信道时 backup_type=0xAA,
+        backup_addr=b"\\xAA"（合计 0xAAAA）。
+        """
+        if not 0 <= main_type <= 0xFF or not 0 <= backup_type <= 0xFF:
+            raise EncodeError("信道类型码超范围(0~0xFF)")
+        data = bytes([main_type]) + bytes(main_addr) + \
+            bytes([backup_type]) + bytes(backup_addr)
+        return self.build_param_set_frame(0xA2, 0x00, data, pw)
+
     def build_set_report_threshold(
         self, category: int, index: int, interval_min: int,
         threshold: float, pw: int = 0,

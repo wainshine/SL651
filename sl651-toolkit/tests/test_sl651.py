@@ -1125,6 +1125,97 @@ def test_sl427_addr_method() -> None:
     print(f"    {a1} | {a2} OK")
 
 
+def test_sl651_downlink_queries() -> None:
+    """无参数体的下行查询帧（37/44/45/46/50/51H，结束符 ENQ）"""
+    print(">>> SL651 下行查询帧补全")
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890", station_type=0x48)
+    cases = [
+        (enc.build_query_frame, 0x37),
+        (enc.build_query_pump_data, 0x44),
+        (enc.build_query_software_version, 0x45),
+        (enc.build_query_status_alarm, 0x46),
+        (enc.build_query_event_record, 0x50),
+        (enc.build_query_clock, 0x51),
+    ]
+    for builder, fc in cases:
+        frame = builder()
+        assert frame[-3] == 0x05, f"0x{fc:02X} 结束符应为 ENQ"
+        r = SL651Decoder().decode(frame)
+        assert r.crc_ok, f"0x{fc:02X} CRC 应通过"
+        assert r.function_code == fc, f"功能码应为 0x{fc:02X}, 实际 0x{r.function_code:02X}"
+        assert r.direction == 1, f"0x{fc:02X} 应为下行"
+    print(f"    {len(cases)} 个下行查询帧 OK")
+
+
+def test_sl651_config_and_manual_frames() -> None:
+    """42H 修改运行参数 / 41H·43H 读取配置 / 0x35 人工置数报"""
+    print(">>> SL651 配置读取/修改与人工置数报")
+    from sl651.encoder import EncodeError
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890", station_type=0x48)
+
+    # 42H 参数设置（复用 40H 正文）
+    f42 = enc.build_set_param_frame([(0x39, 12.345, 4, 3)], function_code=0x42)
+    r42 = SL651Decoder().decode(f42)
+    assert r42.crc_ok and r42.function_code == 0x42 and r42.direction == 1
+    assert f42[-3] == 0x05, "结束符应为 ENQ"
+
+    # 41H / 43H 读取配置（参数标识符列表）
+    f41 = enc.build_read_config_frame([0x01, 0x02])
+    r41 = SL651Decoder().decode(f41)
+    assert r41.crc_ok and r41.function_code == 0x41 and r41.direction == 1
+    f43 = enc.build_read_config_frame([0x01], function_code=0x43)
+    r43 = SL651Decoder().decode(f43)
+    assert r43.crc_ok and r43.function_code == 0x43
+
+    # 0x35 人工置数报（上行，F2 标识符 + 原编码数据）
+    f35 = enc.build_manual_frame(bytes.fromhex("0102030405"))
+    r35 = SL651Decoder().decode(f35)
+    assert r35.crc_ok and r35.function_code == 0x35 and r35.direction == 0
+    try:
+        enc.build_manual_frame(b"")
+        raise AssertionError("空人工置数应抛 EncodeError")
+    except EncodeError:
+        pass
+    print("    42H/41H/43H/35H OK")
+
+
+def test_sl651_init_storage_and_password() -> None:
+    """47H 初始化固态存储（97H 标识符）/ 49H 修改密码（03H 标识符）"""
+    print(">>> SL651 47H/49H")
+    from sl651.encoder import EncodeError
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890", station_type=0x48)
+
+    f47 = enc.build_init_solid_storage()
+    r47 = SL651Decoder().decode(f47)
+    assert r47.crc_ok and r47.function_code == 0x47 and r47.direction == 1
+    assert f47[22:-3] == b"\x97", f"47H 数据域应为 97H: {f47[22:-3].hex()}"
+
+    f49 = enc.build_change_password_frame(0x1234, 0x5678)
+    r49 = SL651Decoder().decode(f49)
+    assert r49.crc_ok and r49.function_code == 0x49 and r49.direction == 1
+    assert f49[22:-3] == bytes.fromhex("031234035678"), f49[22:-3].hex()
+
+    try:
+        enc.build_change_password_frame(0x10000, 0)
+        raise AssertionError("密码超限应抛 EncodeError")
+    except EncodeError:
+        pass
+    print("    47H 97H 标识符 / 49H 新旧密码 OK")
+
+
+def test_sl651_test_frame() -> None:
+    """0x30 测试报编码（正文同定时报，规约表28）"""
+    print(">>> SL651 0x30 测试报编码")
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890", station_type=0x48)
+    frame = enc.build_test_frame([(0x39, 12.345, 4, 3)],
+                                 obs_time=datetime(2026, 9, 14, 10, 0))
+    r = SL651Decoder().decode(frame)
+    assert r.crc_ok and r.function_code == 0x30, f"0x{r.function_code:02X}"
+    wl = [e for e in r.elements if e.code == "39"]
+    assert wl and abs(float(wl[0].value) - 12.345) < 0.001, r.elements
+    print("    0x30 测试报编解码 OK")
+
+
 def test_sl651_ascii_uniform() -> None:
     """0x31 ASCII 均匀报：时间步长码 DRxnn + 单标识符多值数组"""
     print(">>> SL651 0x31 ASCII 均匀报")
@@ -1188,7 +1279,9 @@ def main() -> int:
         test_sl427_84_no_tp, test_sl651_bcd_overflow_contract,
         test_sl427_bcd_overflow_contract, test_sl651_body_len_limit,
         test_sl427_short_data_degrade, test_sl427_addr_method,
-        test_sl651_ascii_uniform,
+        test_sl651_ascii_uniform, test_sl651_test_frame,
+        test_sl651_downlink_queries, test_sl651_config_and_manual_frames,
+        test_sl651_init_storage_and_password,
     ]
     for test in tests:
         try:

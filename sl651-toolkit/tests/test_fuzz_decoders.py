@@ -121,11 +121,32 @@ def test_sl427_fuzz() -> None:
     print(f"    600 次变异无未受控异常 OK")
 
 
+def test_sl651_feed_fuzz() -> None:
+    """流式 feed() 对随机/变异输入不抛未受控异常。"""
+    print(">>> SL651 feed() 流式健壮性")
+    rng = random.Random(5142026)
+    bases = _base_sl651_frames()
+    for _ in range(300):
+        dec = SL651Decoder()
+        payload = b"".join(
+            _mutate(bases[rng.randrange(len(bases))], rng) for _ in range(rng.randrange(1, 4))
+        )
+        try:
+            dec.feed(payload)
+        except ALLOWED:
+            pass
+        except Exception as e:  # noqa: BLE001
+            FAILURES.append(f"feed: {type(e).__name__}: {e}")
+    assert not FAILURES, f"feed 未受控异常: {FAILURES[:5]}"
+    print("    300 次流式喂入无未受控异常 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("解码器变异/模糊测试")
     print("=" * 60)
-    for name, fn in (("SL651", test_sl651_fuzz), ("SL427", test_sl427_fuzz)):
+    for name, fn in (("SL651", test_sl651_fuzz), ("SL427", test_sl427_fuzz),
+                     ("SL651 feed", test_sl651_feed_fuzz)):
         try:
             fn()
         except Exception as e:

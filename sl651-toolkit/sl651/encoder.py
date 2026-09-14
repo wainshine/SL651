@@ -189,6 +189,14 @@ class SL651Encoder:
         body = self.build_timing_body(elements, obs_time)
         return self.build_frame(function_code, body)
 
+    def build_test_frame(
+        self,
+        elements: list[tuple[int, float, int, int]],
+        obs_time: datetime | None = None,
+    ) -> bytes:
+        """测试报 (0x30)。正文结构与定时报相同（规约表28）。"""
+        return self.build_timing_frame(elements, obs_time, function_code=0x30)
+
     def build_link_maintain_body(self) -> bytes:
         return b""
 
@@ -330,6 +338,36 @@ class SL651Encoder:
         return self.build_frame(0x37, b"",
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
+    def build_downlink_query(self, function_code: int) -> bytes:
+        """通用下行查询帧：正文仅流水号+发报时间，结束符 ENQ。
+
+        适用于表42/54/56/59/83/85 等无参数体的查询（44H/45H/46H/50H/51H）。
+        """
+        if not 0 <= function_code <= 0xFF:
+            raise EncodeError(f"function_code 超范围(0~0xFF): {function_code}")
+        return self.build_frame(function_code, b"",
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
+
+    def build_query_pump_data(self) -> bytes:
+        """查询水泵电机实时工作数据（下行，0x44，表54）。"""
+        return self.build_downlink_query(0x44)
+
+    def build_query_software_version(self) -> bytes:
+        """查询遥测站软件版本（下行，0x45，表56）。"""
+        return self.build_downlink_query(0x45)
+
+    def build_query_status_alarm(self) -> bytes:
+        """查询遥测站状态及报警（下行，0x46，表59）。"""
+        return self.build_downlink_query(0x46)
+
+    def build_query_event_record(self) -> bytes:
+        """查询遥测站事件记录（下行，0x50，表83）。"""
+        return self.build_downlink_query(0x50)
+
+    def build_query_clock(self) -> bytes:
+        """查询遥测站时钟（下行，0x51，表85）。"""
+        return self.build_downlink_query(0x51)
+
     def build_set_param_body(self, params: list[tuple[int, float, int, int]]) -> bytes:
         """参数设置正文：引导符+定义符+数据值。"""
         body = bytearray()
@@ -339,10 +377,54 @@ class SL651Encoder:
             body.extend(_encode_bcd(value, data_len, decimals))
         return bytes(body)
 
-    def build_set_param_frame(self, params: list[tuple[int, float, int, int]]) -> bytes:
-        """参数设置帧（下行，0x40 修改基本配置表，结束符 ENQ）。"""
-        return self.build_frame(0x40, self.build_set_param_body(params),
+    def build_set_param_frame(
+        self, params: list[tuple[int, float, int, int]], function_code: int = 0x40
+    ) -> bytes:
+        """参数设置帧（下行，默认 0x40 修改基本配置表；0x42 修改运行参数，结束符 ENQ）。"""
+        return self.build_frame(function_code, self.build_set_param_body(params),
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
+
+    def build_read_config_frame(
+        self, guides: list[int], function_code: int = 0x41
+    ) -> bytes:
+        """读取基本配置/运行参数帧（下行，默认 0x41；0x43 读取运行参数，结束符 ENQ）。
+
+        正文为待读取参数的标识符列表（引导符+定义符，表52）。
+        """
+        return self.build_frame(function_code, self.build_query_body(guides),
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
+
+    def build_init_solid_storage(self) -> bytes:
+        """初始化固态存储数据帧（下行，0x47，表61）。
+
+        正文含 97H「固态存储数据初始化」标识符（附录D #120）。
+        """
+        return self.build_frame(0x47, bytes([0x97]),
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
+
+    def build_change_password_frame(self, old_pw: int, new_pw: int) -> bytes:
+        """修改传输密码帧（下行，0x49，表65）。
+
+        正文 = 旧密码(标识符 03H + 2B HEX) + 新密码(标识符 03H + 2B HEX)；
+        密码标识符取附录D 表D.1 #3「密码」03H，高位字节在前。
+        """
+        for name, v in (("旧密码", old_pw), ("新密码", new_pw)):
+            if not 0 <= v <= 0xFFFF:
+                raise EncodeError(f"{name}超范围(0~0xFFFF): {v}")
+        body = (bytes([0x03, (old_pw >> 8) & 0xFF, old_pw & 0xFF])
+                + bytes([0x03, (new_pw >> 8) & 0xFF, new_pw & 0xFF]))
+        return self.build_frame(0x49, body,
+                                direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
+
+    def build_manual_frame(self, payload: bytes) -> bytes:
+        """人工置数报（上行，0x35）。
+
+        正文 = F2H 人工置数标识符 + 原编码（SL330，结束符 NN 省略）数据（表38/附录C 注c）。
+        payload 为调用方按 SL330 约定编码的原始字节。
+        """
+        if not payload:
+            raise EncodeError("人工置数数据不能为空")
+        return self.build_frame(0x35, bytes([0xF2]) + bytes(payload))
 
     def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
         """时钟校准正文（0x4A 表67）：空，发报时间即校时值。"""

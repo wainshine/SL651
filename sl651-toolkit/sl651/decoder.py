@@ -259,6 +259,171 @@ def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int, syn_p
 class SL651Decoder:
     """SL651 报文解码器。"""
 
+    def __init__(self) -> None:
+        self._buf = b""
+        # 多包重组缓存: key -> {seq: body_slice}
+        self._pending: dict[tuple, dict[int, bytes]] = {}
+        self._pending_meta: dict[tuple, dict] = {}
+
+    # ------------------------------------------------------------------
+    # 流式解析 + 多包 (SYN/ETB) 重组
+    # ------------------------------------------------------------------
+
+    def feed(self, data: bytes) -> list[DecodedMessage]:
+        """流式输入字节，返回本次可完整解析的报文（含多包重组结果）。
+
+        支持跨次调用缓冲不完整帧；多包报文按 SYN 帧的「包总数/序列号」重组，
+        以 ETB 表示后续还有包、ETX 表示最后一包（规约 6.3.2.5 / 表18/表22）。
+        """
+        self._buf += data
+        out: list[DecodedMessage] = []
+        while True:
+            frame, consumed = self._extract_frame(self._buf)
+            if consumed:
+                self._buf = self._buf[consumed:]
+            if frame is None:
+                break
+            try:
+                out.extend(self._handle_frame(frame))
+            except DecodeError:
+                continue  # 跳过无法解析的帧，继续流式解析
+        return out
+
+    def reset(self) -> None:
+        """清空流式缓冲与多包重组状态。"""
+        self._buf = b""
+        self._pending.clear()
+        self._pending_meta.clear()
+
+    def _extract_frame(self, buf: bytes) -> tuple[bytes | None, int]:
+        """从缓冲提取一个完整帧。返回 (frame, consumed)。
+
+        consumed 为应从缓冲移除的字节数；frame=None 且 consumed=0 表示数据不足需等待。
+        """
+        n = len(buf)
+        idx = -1
+        is_ascii = False
+        for i in range(n):
+            if buf[i] == C.START_BYTE:
+                if i + 1 >= n:
+                    return None, i  # 末字节可能是 7E7E 前半，保留待续
+                if buf[i + 1] == C.START_BYTE:
+                    idx, is_ascii = i, False
+                    break
+                # 孤立 7E，跳过
+            elif buf[i] == C.SOH:
+                idx, is_ascii = i, True
+                break
+        if idx < 0:
+            return None, n  # 无起始符，丢弃全部
+        if idx > 0:
+            return None, idx  # 丢弃前导垃圾
+
+        if not is_ascii:
+            if n < C.BODY_OFFSET:
+                return None, 0
+            body_len = ((buf[11] & 0x0F) << 8) | buf[12]
+            total = C.BODY_OFFSET + body_len + 3
+        else:
+            if n < C.ASCII_STX_OFFSET + 1:
+                return None, 0
+            try:
+                ident_raw = int(buf[19:23].decode("ascii"), 16)
+            except (ValueError, UnicodeDecodeError):
+                return None, 1
+            body_len = (((ident_raw >> 8) & 0x0F) << 8) | (ident_raw & 0xFF)
+            total = C.ASCII_BODY_OFFSET + body_len + 1 + C.ASCII_CRC_LEN
+        if n < total:
+            return None, 0
+        return buf[:total], total
+
+    def _handle_frame(self, frame: bytes) -> list[DecodedMessage]:
+        is_ascii = frame[0] == C.SOH
+        stx = frame[C.ASCII_STX_OFFSET] if is_ascii else frame[C.STX_OFFSET]
+        if stx != C.SYN:
+            return [self.decode(frame)]
+        return self._handle_syn(frame, is_ascii)
+
+    def _handle_syn(self, frame: bytes, is_ascii: bool) -> list[DecodedMessage]:
+        """处理 SYN 多包帧：缓存并按序重组，完整后合成单帧解码。"""
+        if not is_ascii:
+            center = frame[2]
+            station = frame[3:8]
+            pwd = frame[8:10]
+            func = frame[10]
+            direction = (frame[11] >> 7) & 1
+            body_len = ((frame[11] & 0x0F) << 8) | frame[12]
+            etx = C.BODY_OFFSET + body_len
+            pkt = frame[C.BODY_OFFSET:C.BODY_OFFSET + 3]
+            total = (pkt[0] << 4) | (pkt[1] >> 4)
+            seq = ((pkt[1] & 0x0F) << 8) | pkt[2]
+            body_slice = frame[C.BODY_OFFSET + 3:etx]
+            end_marker = frame[etx]
+        else:
+            try:
+                center = frame[1:3].decode("ascii")
+                station = frame[3:13].decode("ascii")
+                pwd = frame[13:17].decode("ascii")
+                func = int(frame[17:19].decode("ascii"), 16)
+                ident_raw = int(frame[19:23].decode("ascii"), 16)
+                pkt = frame[C.ASCII_STX_OFFSET + 1:C.ASCII_STX_OFFSET + 7].decode("ascii")
+            except (ValueError, UnicodeDecodeError):
+                raise DecodeError("ASCII SYN 帧头解析失败")
+            direction = (ident_raw >> 15) & 1
+            body_len = (((ident_raw >> 8) & 0x0F) << 8) | (ident_raw & 0xFF)
+            etx = C.ASCII_BODY_OFFSET + body_len
+            total = int(pkt[0:3]) if pkt[0:3].isdigit() else 0
+            seq = int(pkt[3:6]) if pkt[3:6].isdigit() else 0
+            body_slice = frame[C.ASCII_STX_OFFSET + 7:etx]
+            end_marker = frame[etx]
+
+        if total <= 0 or not 1 <= seq <= total:
+            raise DecodeError(f"SYN 包头非法: 总数={total}, 序号={seq}")
+
+        key = (is_ascii, center, station, pwd, func, direction)
+        meta = self._pending_meta.get(key)
+        if meta is not None and meta["total"] != total:
+            # 包总数变化，视为新序列，重置
+            self._pending[key] = {}
+            meta = None
+        if meta is None:
+            self._pending_meta[key] = {"frame": frame, "total": total}
+        buf = self._pending.setdefault(key, {})
+        buf[seq] = body_slice
+
+        if len(buf) < total or any(i not in buf for i in range(1, total + 1)):
+            return []  # 等待其余包
+
+        combined = b"".join(buf[i] for i in range(1, total + 1))
+        first = self._pending_meta[key]["frame"]
+        del self._pending[key]
+        del self._pending_meta[key]
+        synthetic = self._build_reassembled(first, combined, is_ascii)
+        return [self.decode(synthetic)]
+
+    @staticmethod
+    def _build_reassembled(first: bytes, combined: bytes, is_ascii: bool) -> bytes:
+        """由首包头部 + 合并正文重建单帧（STX 起始，重算长度与 CRC）。"""
+        body_len = len(combined)
+        if body_len > 4095:
+            raise DecodeError(f"重组正文超范围(>4095): {body_len}")
+        if not is_ascii:
+            ident_hi = ((first[11] & 0x80)) | ((body_len >> 8) & 0x0F)
+            ident_lo = body_len & 0xFF
+            hdr = bytearray(first[:C.STX_OFFSET])
+            hdr[11] = ident_hi
+            hdr[12] = ident_lo
+            frame = bytes(hdr) + bytes([C.STX]) + combined + bytes([C.ETX])
+            crc = crc16(frame)
+            return frame + bytes([(crc >> 8) & 0xFF, crc & 0xFF])
+        ident_raw = ((first[19] & 0x80)) | ((body_len >> 8) & 0x0F)
+        ident_lo = body_len & 0xFF
+        hdr = bytearray(first[:19])
+        hdr.extend(f"{ident_raw:02X}{ident_lo:02X}".encode("ascii"))
+        frame = bytes(hdr) + bytes([C.STX]) + combined + bytes([C.ETX])
+        crc = crc16(frame)
+        return frame + f"{crc:04X}".encode("ascii")
+
     def decode_hex(self, hex_str: str) -> DecodedMessage:
         cleaned = "".join(hex_str.split())
         if not cleaned:

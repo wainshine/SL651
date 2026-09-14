@@ -11,7 +11,7 @@
 | `base_station.py` | 站点模拟器基类 `BaseStation` |
 | `generators.py` | 数据生成器：水位（布朗运动+正弦周期）、雨量（降雨事件状态机）、墒情（多层含水量+温度） |
 | `water_level_station.py` | 水位站 `WaterLevelStation`：瞬时河道水位(0x39) + 电池电压(0x38) |
-| `rain_station.py` | 雨量站 `RainStation`：日降水/1h雨量/当前降水/累计雨量/电压 |
+| `rain_station.py` | 雨量站 `RainStation`：日降水/1h雨量/当前降水/累计雨量(0x26，不归零)/电压 |
 | `soil_station.py` | 墒情站 `SoilStation`：10/20/30/40cm含水量 + 电压 |
 | `sender.py` | 发送器：`MqttxSender`（mqttx CLI 子进程）、`TcpSender`（TCP socket 含重连） |
 | `engine.py` | 定时循环引擎：`StationRunner`（单站线程）+ `SimulatorEngine`（多站管理） |
