@@ -141,12 +141,44 @@ def test_sl651_feed_fuzz() -> None:
     print("    300 次流式喂入无未受控异常 OK")
 
 
+def test_legal_frames_no_raise() -> None:
+    """合法帧（含 0xAA/0xFF 缺测填充）不得抛异常，且填充须降级为 '-'。
+
+    审计 v2.4 L-4：变异测试只断言「仅抛受控 DecodeError」，无法发现
+    「合法输入被拒」或「合法填充被解释为错误值」。本用例补正向断言。
+    """
+    from sl427 import make_ctrl
+    print(">>> 合法帧正向断言（不得抛异常）")
+    dec651 = SL651Decoder()
+    for f in _base_sl651_frames():
+        dec651.decode(f)  # 不抛异常即通过
+
+    dec427 = SL427Decoder()
+    for f in _base_sl427_frames():
+        dec427.decode(f)
+
+    enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
+    fill_afns = [0x50, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+                 0x5A, 0x5D, 0x5E, 0x5F, 0x60, 0x62, 0x63, 0x64, 0x84, 0x96]
+    for afn in fill_afns:
+        n = 2 if afn in (0x52, 0x60, 0x84, 0x96) else (4 if afn in (0x53, 0x54, 0x5E, 0x5D) else 9)
+        frame = enc.build_frame(afn, make_ctrl(dir_=1, func_code=0), b"\xAA" * n)
+        r = dec427.decode(frame)  # 合法填充不得抛异常
+        vals = [e.value for e in r.elements]
+        assert vals, f"AFN 0x{afn:02X} 填充应产出降级要素"
+        assert all(v == "-" for v in vals), \
+            f"AFN 0x{afn:02X} 填充应降级为 '-', 实际 {vals[:4]}"
+    print(f"    {len(_base_sl651_frames())} SL651 + {len(_base_sl427_frames())} SL427 合法帧 + "
+          f"{len(fill_afns)} 个填充响应 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("解码器变异/模糊测试")
     print("=" * 60)
     for name, fn in (("SL651", test_sl651_fuzz), ("SL427", test_sl427_fuzz),
-                     ("SL651 feed", test_sl651_feed_fuzz)):
+                     ("SL651 feed", test_sl651_feed_fuzz),
+                     ("合法帧正向", test_legal_frames_no_raise)):
         try:
             fn()
         except Exception as e:

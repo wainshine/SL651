@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.3.1  
+> 版本：v1.3.2  
 > 最后更新：2026-09-14  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 59 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
+├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 60 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -92,7 +92,11 @@ sl651-toolkit/
 | `33` | 加报报 | 上行 | ETX | ✅ | ✅ `build_alarm_frame` | 阈值触发或变化报警 |
 | `34` | 小时报 | 上行 | ETX | ✅ | ✅ `build_hourly_frame` | 每小时 12 组 5min 间隔水位 |
 | `35` | 人工置数报 | 上行 | ETX | ✅ | ✅ `build_manual_frame` | F2 标识符 + 原编码数据 |
+| `36` | 图片报 | 上行 | ETX | ✅ | — | 图片信息（F3 标识符） |
 | `37` | 查询实时数据 | 下行 | ENQ | — | ✅ `build_query_frame` | 查询所有实时数据（表42） |
+| `38` | 查询时段数据 | 下行 | ENQ | — | — | 中心站查询遥测站指定要素时段数据 |
+| `39` | 查询人工置数 | 下行 | ENQ | — | — | 中心站查询遥测站人工置数 |
+| `3A` | 查询指定要素 | 下行 | ENQ | — | ✅ `build_query_body` | 正文含要素引导符列表 |
 | `40` | 修改基本配置 | 下行 | ENQ | — | ✅ `build_set_param_frame` | 参数设置 |
 | `41` | 读取基本配置 | 下行 | ENQ | — | ✅ `build_read_config_frame` | 参数标识符列表（附录D） |
 | `42` | 修改运行参数 | 下行 | ENQ | — | ✅ `build_set_param_frame(fc=0x42)` | 同 40H 正文 |
@@ -104,6 +108,11 @@ sl651-toolkit/
 | `48` | 恢复出厂设置 | 下行 | ENQ | — | ✅ `build_reset_frame` | 98H 标识符 |
 | `49` | 修改密码 | 下行 | ENQ | — | ✅ `build_change_password_frame` | 03H 标识符 + 新旧密码 2B |
 | `4A` | 设置时钟 | 下行 | ENQ | — | ✅ `build_clock_sync_frame` | 时钟校准 |
+| `4B` | 设置IC卡状态 | 下行 | ENQ | — | — | 中心站设置遥测站IC卡状态 |
+| `4C` | 控制水泵 | 下行 | ENQ | — | — | 控制抽（排）水站水泵开关机/状态自报 |
+| `4D` | 控制阀门 | 下行 | ENQ | — | — | 控制取（排）水口管道阀门开关/状态自报 |
+| `4E` | 控制闸门 | 下行 | ENQ | — | — | 控制取（排）水口闸门开关/状态自报 |
+| `4F` | 水量定值控制 | 下行 | ENQ | — | — | 水量定值控制功能投入/退出 |
 | `50` | 查询事件记录 | 下行 | ENQ | — | ✅ `build_query_event_record` | 空正文 |
 | `51` | 查询时钟 | 下行 | ENQ | — | ✅ `build_query_clock` | 空正文 |
 
@@ -370,7 +379,7 @@ python web/app.py
 | `test_sl427_downlink` | SL427 | 下行帧解码 |
 | `test_sl427_param_settings` | SL427 | 设置地址/时钟/充值/IC卡 往返 |
 | `test_fujian_messages` | SL651 | **23 条福建规定真实报文 CRC + 要素级基线** |
-| `test_beijing_messages` | SL651 | **25 条北京水务平台真实报文 CRC + 要素级基线**（8测站/3类报文） |
+| `test_beijing_messages` | SL651 | **25 条北京水务平台真实报文 CRC + 要素级基线**（10测站/3类报文） |
 | `test_simulator_engine_smoke` | 模拟器 | 引擎冒烟测试 |
 | `test_hourly_frame_validation` | SL651 | 小时报 12 组校验 |
 | `test_recharge_le_bcd` | SL427 | 充值量小端 BCD |
@@ -408,8 +417,9 @@ python web/app.py
 | `test_sl651_init_storage_and_password` | SL651 | 47H 初始化固态存储（97H 标识符）/ 49H 修改密码（03H 标识符） |
 | `test_sl651_func_name_consistency` | SL651 | FUNC_MAP 功能码名称与规约/编码器一致（v1.3.1 M-1） |
 | `test_sl651_manual_frame_fujian` | SL651 | 真实福建 0x35 人工置数报 F2 载荷解析（v1.3.1 M-3） |
+| `test_sl427_fill_semantics` | SL427 | 0xAA/0xFF 缺测填充全分支降级 `-` + AFN=84 填充不拒帧（v1.3.2 M-1/M-2） |
 
-**总计: 59 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
+**总计: 60 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
 
 ### 7.4 辅助测试套件
 
@@ -417,7 +427,7 @@ python web/app.py
 |------|------|
 | `test_round1_blindspots.py` | 10 项盲区测试（小时报往返/异常、SL427 81/82/84、充值量数值级） |
 | `test_simulator_integration.py` | 5 组端到端集成（引擎全链路、雨量加报边沿、站点注册、TcpSender 真实 TCP 收发、0x26 不归零累计） |
-| `test_fuzz_decoders.py` | SL651/SL427 解码器变异测试（各 600 次，断言仅抛受控 `DecodeError`） |
+| `test_fuzz_decoders.py` | SL651/SL427 解码器变异测试（各 600 次，断言仅抛受控 `DecodeError`）+ 合法帧/合法填充正向断言（v1.3.2 L-4） |
 | `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 + 10H 地址长度/A2H 信道地址长度校验（v1.3.1 M-4） |
 | `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 + 0xAA/0xFF 缺测填充容错（v1.3.1 M-2） |
 | `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 + 0xAA 填充容错（v1.3.1 M-2） |
@@ -445,7 +455,7 @@ python tools/decode_cli.py sl651 --file examples/fujian_messages.txt
 # 批量验证
 python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 
-# 覆盖 25 条报文，8 个测站，3 类报文：
+# 覆盖 25 条报文，10 个测站，3 类报文：
 # 32(定时报) / 33(加报报) / 34(小时报)
 # 含 7 个北京水务 FF 自定义子标识符：GPRS信号/机箱温度/地温/垂线流速等
 ```
@@ -509,6 +519,13 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | SL651 多包 SYN/ETB 重组 | `feed()` 流式 API，按包总数/序列号重组，支持乱序/增量/垃圾字节（`tests/test_sl651_multipacket.py`） |
 | SL651 编码器补全 | 0x30/0x35/41H/42H/43H/44H/45H/46H/47H/49H/50H/51H + `build_downlink_query` |
 | 模拟器 0x26 累计雨量 | 改为不归零累计（`RainGenerator.total_accum`，上限翻转） |
+
+### ✅ 已完成（v1.3.2）
+
+| 任务 | 说明 |
+|------|------|
+| 审计 v2.4 修复 | M-1 缺测填充全分支 / M-2 AFN=84 填充 / L-1~L-5 文档与测试 |
+| 测试增强 | 主套件 59 → 60 项（填充全分支语义）；变异套件补合法帧正向断言 |
 
 ### ✅ 已完成（v1.3.1）
 

@@ -237,8 +237,16 @@ def _parse_statistical_rainfall(data: bytes) -> list[ElementValue]:
     return items
 
 
+def _is_fill(data: bytes) -> bool:
+    """是否为规约「未采集/无数据」填充：全 0xAA 或全 0xFF（规约行 1172/900）。"""
+    return bool(data) and (all(b == 0xAA for b in data) or all(b == 0xFF for b in data))
+
+
 def _parse_alarm(data: bytes) -> list[ElementValue]:
-    """解析告警状态。"""
+    """解析告警状态。全 0xAA/0xFF 填充（缺测）降级为单个 '-' 要素。"""
+    if _is_fill(data):
+        return [ElementValue(name="告警状态", value="-", unit="",
+                             raw=bytes_to_hex_compact(data), editable=False)]
     num = data[0] | (data[1] << 8)
     items = []
     for ab in C.ALARM_BITS:
@@ -251,7 +259,10 @@ def _parse_alarm(data: bytes) -> list[ElementValue]:
 
 
 def _parse_terminal(data: bytes) -> list[ElementValue]:
-    """解析终端状态。"""
+    """解析终端状态。全 0xAA/0xFF 填充（缺测）降级为单个 '-' 要素。"""
+    if _is_fill(data):
+        return [ElementValue(name="终端状态", value="-", unit="",
+                             raw=bytes_to_hex_compact(data), editable=False)]
     num = data[0] | (data[1] << 8)
     items = []
     for tb in C.TERMINAL_BITS:
@@ -267,20 +278,19 @@ def _parse_terminal(data: bytes) -> list[ElementValue]:
     return items
 
 def _safe_bcd_le(data: bytes) -> int | None:
-    """小端 BCD 安全解析：含 0xAA/0xFF 缺测填充或非法半字节时返回 None。
+    """小端 BCD 解析：仅对规约合法的 0xAA/0xFF 缺测填充返回 None（降级 '-'）。
 
-    规约规定未采集/无数据的参数用 0xAA 占位（如规约行 1172/900），此时不应
-    将整帧判为解码失败，而应降级显示 '-'。
+    非填充的非法半字节（如 0x1A）仍抛 ValueError，由上层包装为 DecodeError，
+    保持「畸形数据被拒绝」的契约（审计 v2.4 L-3）。
     """
-    try:
-        return bcd_bytes_to_int_le(data)
-    except ValueError:
+    if _is_fill(data):
         return None
+    return bcd_bytes_to_int_le(data)
 
 
 def _bcd_le_signed(data: bytes) -> int | str:
-    """小端 BCD（末字节 D7 为符号位，1=负）-> 有符号整数；无效返回 '-'。"""
-    if not data:
+    """小端 BCD（末字节 D7 为符号位，1=负）-> 有符号整数；填充/无效返回 '-'。"""
+    if not data or _is_fill(data):
         return "-"
     last = data[-1]
     neg = bool(last & 0x80)
@@ -314,6 +324,8 @@ def _parse_switch_record_427(seg: bytes) -> str:
     """解析 5B 中继切换时间（表32：分 时 日 星期月 年 BCD）。"""
     if len(seg) < 5:
         return bytes_to_hex_compact(seg)
+    if _is_fill(seg):
+        return "-"
     minute = safe_bcd_to_int(seg[0])
     hour = safe_bcd_to_int(seg[1])
     day = safe_bcd_to_int(seg[2])
@@ -386,6 +398,9 @@ def _parse_water_quality_427(data: bytes) -> list[ElementValue]:
     out: list[ElementValue] = []
     if len(data) < 5:
         return out
+    if _is_fill(data):
+        return [ElementValue(name="水质参数", value="-", unit="",
+                             raw=bytes_to_hex_compact(data), editable=False)]
     mask = int.from_bytes(data[:5], "little")
     body = data[5:]
     idx = 0
@@ -448,16 +463,23 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
     elif afn_hex == "52":
         if len(data) >= 1:
             mode = data[0]
-            name = {0: "兼容", 1: "自报", 2: "查询/应答", 3: "调试"}.get(mode, f"未知({mode})")
+            if mode in (0xAA, 0xFF):
+                name = "-"
+            else:
+                name = {0: "兼容", 1: "自报", 2: "查询/应答", 3: "调试"}.get(mode, f"未知({mode})")
             out.append(ElementValue(name="工作模式", value=name, unit="",
                                     raw=f"{mode:02X}", editable=False))
     elif afn_hex == "53":
         if len(data) >= 2:
-            mask = data[0] | (data[1] << 8)
-            names = [C.RT_KINDS_REPORT[i] for i in range(16) if (mask >> i) & 1]
-            out.append(ElementValue(name="数据自报种类",
-                                    value="、".join(names) or "无",
-                                    unit="", raw=raw, editable=False))
+            if _is_fill(data[:2]):
+                out.append(ElementValue(name="数据自报种类", value="-",
+                                        unit="", raw=raw, editable=False))
+            else:
+                mask = data[0] | (data[1] << 8)
+                names = [C.RT_KINDS_REPORT[i] for i in range(16) if (mask >> i) & 1]
+                out.append(ElementValue(name="数据自报种类",
+                                        value="、".join(names) or "无",
+                                        unit="", raw=raw, editable=False))
             for i in range((len(data) - 2) // 2):
                 iv = _safe_bcd_le(data[2 + i * 2:4 + i * 2])
                 label = C.RT_KINDS_REPORT[i] if i < len(C.RT_KINDS_REPORT) else f"#{i}"
@@ -469,11 +491,15 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                     unit="bytes", raw=raw, editable=False))
     elif afn_hex == "54":
         if len(data) >= 2:
-            mask = data[0] | (data[1] << 8)
-            names = [C.CTRL_FUNC_MAP.get(i, {}).get("name", f"0x{i:02X}")
-                     for i in range(16) if (mask >> i) & 1]
-            out.append(ElementValue(name="实时数据种类", value="、".join(names) or "无",
-                                    unit="", raw=f"{mask:04X}", editable=False))
+            if _is_fill(data[:2]):
+                out.append(ElementValue(name="实时数据种类", value="-",
+                                        unit="", raw=raw, editable=False))
+            else:
+                mask = data[0] | (data[1] << 8)
+                names = [C.CTRL_FUNC_MAP.get(i, {}).get("name", f"0x{i:02X}")
+                         for i in range(16) if (mask >> i) & 1]
+                out.append(ElementValue(name="实时数据种类", value="、".join(names) or "无",
+                                        unit="", raw=f"{mask:04X}", editable=False))
     elif afn_hex == "55":
         if len(data) >= 9:
             recharge = _safe_bcd_le(data[:4])
@@ -504,12 +530,14 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
         for i, (lab, unit) in enumerate(labels):
             seg = data[i * 2:i * 2 + 2]
             if len(seg) == 2:
-                out.append(ElementValue(name=lab, value=int.from_bytes(seg, "little"),
+                val = "-" if _is_fill(seg) else int.from_bytes(seg, "little")
+                out.append(ElementValue(name=lab, value=val,
                                         unit=unit, raw=bytes_to_hex_compact(seg),
                                         editable=False))
     elif afn_hex == "60":
         if data:
-            out.append(ElementValue(name="中继引导码长值", value=data[0], unit="s",
+            val = "-" if data[0] in (0xAA, 0xFF) else data[0]
+            out.append(ElementValue(name="中继引导码长值", value=val, unit="s",
                                     raw=f"{data[0]:02X}", editable=False))
     elif afn_hex == "62":
         n = len(data) // 5
@@ -522,7 +550,7 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
         n = min(len(data) // 2, len(C.EVENT_RECORDS))
         for i in range(n):
             seg = data[i * 2:i * 2 + 2]
-            cnt = int.from_bytes(seg, "little")
+            cnt = "-" if _is_fill(seg) else int.from_bytes(seg, "little")
             out.append(ElementValue(name=f"事件记录[{C.EVENT_RECORDS[i]}]", value=cnt,
                                     unit="次", raw=bytes_to_hex_compact(seg),
                                     editable=False))
@@ -552,21 +580,25 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
         out.extend(_parse_channel_427(data))
     elif afn_hex == "63":
         if len(data) >= 2:
-            b1, b2 = data[0], data[1]
-            out.append(ElementValue(name="中继自动切换/自报", value=f"0x{b1:02X}",
-                                    unit="", raw=f"{b1:02X}", editable=False))
-            flags = [
-                (0, "工作机A机", {1: "正常", 0: "故障"}),
-                (1, "工作机B机", {1: "正常", 0: "故障"}),
-                (2, "值班机", {1: "A机", 0: "B机"}),
-                (3, "转发", {1: "允许", 0: "不允许"}),
-                (4, "电源", {1: "报警", 0: "正常"}),
-                (5, "中继", {1: "故障报警", 0: "正常"}),
-            ]
-            for bit, name, mp in flags:
-                out.append(ElementValue(name=f"中继状态[{name}]",
-                                        value=mp.get((b2 >> bit) & 1, "-"),
-                                        unit="", raw=f"{b2:02X}", editable=False))
+            if _is_fill(data[:2]):
+                out.append(ElementValue(name="中继状态", value="-", unit="",
+                                        raw=raw, editable=False))
+            else:
+                b1, b2 = data[0], data[1]
+                out.append(ElementValue(name="中继自动切换/自报", value=f"0x{b1:02X}",
+                                        unit="", raw=f"{b1:02X}", editable=False))
+                flags = [
+                    (0, "工作机A机", {1: "正常", 0: "故障"}),
+                    (1, "工作机B机", {1: "正常", 0: "故障"}),
+                    (2, "值班机", {1: "A机", 0: "B机"}),
+                    (3, "转发", {1: "允许", 0: "不允许"}),
+                    (4, "电源", {1: "报警", 0: "正常"}),
+                    (5, "中继", {1: "故障报警", 0: "正常"}),
+                ]
+                for bit, name, mp in flags:
+                    out.append(ElementValue(name=f"中继状态[{name}]",
+                                            value=mp.get((b2 >> bit) & 1, "-"),
+                                            unit="", raw=f"{b2:02X}", editable=False))
             rec = data[2:]
             for i in range(len(rec) // 5):
                 seg = rec[i * 5:i * 5 + 5]
@@ -943,10 +975,16 @@ class SL427Decoder:
         elif afn_hex == "84":
             # 自报电压: 规范表B.98 自报帧数据域仅 2B BCD 电压（低位在前），无 alarm/state/Tp
             if len(data_field) >= 2:
-                volt_val = bcd_bytes_to_int_le(data_field[:2]) / 100
+                seg = data_field[:2]
+                v = _safe_bcd_le(seg)
+                if v is None:
+                    self._warnings.append("AFN=84H 电压为 0xAA/0xFF 缺测填充，降级显示 '-'")
+                    volt_val = "-"
+                else:
+                    volt_val = f"{v / 100:.2f}"
                 elements.append(ElementValue(
-                    name="电压", value=f"{volt_val:.2f}", unit="V",
-                    raw=bytes_to_hex_compact(data_field[:2]),
+                    name="电压", value=volt_val, unit="V",
+                    raw=bytes_to_hex_compact(seg),
                     byte_len=2, decimal=2,
                 ))
             else:

@@ -1306,6 +1306,23 @@ def test_sl651_manual_frame_fujian() -> None:
     print("    福建 0x35 F2 载荷 OK")
 
 
+def test_sl427_fill_semantics() -> None:
+    """SL427 0xAA/0xFF 缺测填充全分支降级 + AFN=84 填充不拒帧（审计 v2.4 M-1/M-2）"""
+    print(">>> SL427 缺测填充全分支语义")
+    from sl427 import SL427Encoder, SL427Decoder, encode_address, make_ctrl
+    enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
+    cases = {0x5D: 4, 0x5E: 4, 0x5F: 12, 0x60: 1, 0x63: 7,
+             0x57: 11, 0x58: 12, 0x59: 13, 0x84: 2}
+    for afn, n in cases.items():
+        frame = enc.build_frame(afn, make_ctrl(dir_=1, func_code=0), b"\xAA" * n)
+        r = SL427Decoder().decode(frame)
+        assert r.crc_ok, f"0x{afn:02X} CRC"
+        assert r.elements, f"0x{afn:02X} 应有降级要素"
+        bad = [(e.name, e.value) for e in r.elements if e.value != "-"]
+        assert not bad, f"0x{afn:02X} 填充应全为 '-', 异常项: {bad[:3]}"
+    print(f"    {len(cases)} 个 AFN 填充全分支降级 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 工具包自测")
@@ -1342,6 +1359,7 @@ def main() -> int:
         test_sl651_downlink_queries, test_sl651_config_and_manual_frames,
         test_sl651_init_storage_and_password,
         test_sl651_func_name_consistency, test_sl651_manual_frame_fujian,
+        test_sl427_fill_semantics,
     ]
     for test in tests:
         try:
