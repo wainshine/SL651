@@ -338,58 +338,121 @@ def test_sl651_ascii_roundtrip() -> None:
     print("    OK")
 
 
-def test_fujian_messages() -> None:
-    print(">>> 福建规定示例报文")
-    sample_file = PROJECT_ROOT / "examples" / "fujian_messages.txt"
+# 真实报文要素级基线：(功能码, 要素总数, 首要素码, 首值, 末要素码, 末值)
+# 首/末值 None 表示跳过数值断言（如 F3 图片为动态摘要字符串）。
+# 该基线用于防止「CRC 通过但要素解析错误」的静默回归（审计 v2.2 M-4）。
+FUJIAN_BASELINE = [
+    (0x49, 0, None, None, None, None),
+    (0x34, 14, "F5", "27.30", "38", 12.9),
+    (0x32, 3, "20", 5.5, "38", 12.9),
+    (0x31, 13, "04", 5, "39", 28.96),
+    (0x32, 4, "20", 0.0, "38", 13.12),
+    (0x33, 4, "39", 28.96, "38", 13.17),
+    (0x34, 28, "F4", "0.0", "38", 13.16),
+    (0x35, 0, None, None, None, None),
+    (0x36, 2, "F3", None, "05", 7),
+    (0x37, 4, "20", 0.0, "38", 11.43),
+    (0x38, 13, "04", 0, "F4", "-"),
+    (0x3A, 1, "26", 0.0, "26", 0.0),
+    (0x41, 0, None, None, None, None),
+    (0x43, 0, None, None, None, None),
+    (0x45, 1, "56", "-", "56", "-"),
+    (0x46, 0, None, None, None, None),
+    (0x40, 0, None, None, None, None),
+    (0x42, 0, None, None, None, None),
+    (0x47, 0, None, None, None, None),
+    (0x48, 0, None, None, None, None),
+    (0x4A, 0, None, None, None, None),
+    (0x51, 0, None, None, None, None),
+    (0x50, 0, None, None, None, None),
+]
+
+BEIJING_BASELINE = [
+    (0x32, 16, "26", 311.3, "FF33", 20.5),
+    (0x32, 16, "26", 311.3, "FF33", 20.3),
+    (0x32, 14, "26", 1222.2, "38", 14.16),
+    (0x32, 14, "26", 1222.2, "38", 12.69),
+    (0x33, 13, "22", 0.0, "38", 12.0),
+    (0x33, 13, "22", 0.0, "38", 11.98),
+    (0x33, 13, "22", 0.0, "38", 11.97),
+    (0x32, 13, "22", 0.0, "38", 11.94),
+    (0x32, 13, "22", 0.0, "38", 11.9),
+    (0x33, 13, "22", 0.0, "38", 11.99),
+    (0x32, 13, "22", 0.0, "38", 11.87),
+    (0x32, 13, "22", 0.0, "38", 11.81),
+    (0x33, 13, "22", 0.0, "38", 11.8),
+    (0x34, 14, "F5", "0.00", "38", 12.07),
+    (0x34, 14, "F5", "0.00", "38", 12.05),
+    (0x34, 27, "F4", "0.0", "38", 13.7),
+    (0x34, 27, "F4", "0.0", "38", 13.5),
+    (0x32, 5, "39", 33.66, "38", 12.3),
+    (0x32, 5, "39", 33.7, "38", 12.3),
+    (0x32, 2, "39", 0.0, "38", 12.33),
+    (0x34, 14, "F5", "0.00", "38", 12.32),
+    (0x34, 14, "F5", "1.07", "38", 12.0),
+    (0x34, 14, "F5", "1.09", "38", 12.0),
+    (0x32, 2, "26", 184.8, "38", 12.0),
+    (0x32, 2, "26", 184.8, "38", 12.0),
+]
+
+
+def _value_eq(actual, expected) -> bool:
+    if isinstance(expected, float) and isinstance(actual, (int, float)):
+        return abs(actual - expected) < 1e-9
+    return actual == expected
+
+
+def _check_baseline(name: str, sample_file: Path, baseline: list) -> None:
     if not sample_file.exists():
-        print("    跳过（fujian_messages.txt 不存在）")
+        print(f"    跳过（{sample_file.name} 不存在）")
         return
     from sl651 import SL651Decoder
     decoder = SL651Decoder()
-    success = 0
+    lines = [
+        ln.strip() for ln in sample_file.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.startswith("#")
+    ]
+    assert len(lines) == len(baseline), \
+        f"{name} 报文数 {len(lines)} != 基线 {len(baseline)}"
     failed = 0
-    for line in sample_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            r = decoder.decode_hex(line)
-            if r.crc_ok:
-                success += 1
-            else:
-                failed += 1
-        except Exception:
+    for i, (line, exp) in enumerate(zip(lines, baseline)):
+        func, nelem, fcode, fval, lcode, lval = exp
+        r = decoder.decode_hex(line)
+        errs = []
+        if not r.crc_ok:
+            errs.append("CRC 失败")
+        if r.function_code != func:
+            errs.append(f"功能码 0x{r.function_code:02X} != 0x{func:02X}")
+        if len(r.elements) != nelem:
+            errs.append(f"要素数 {len(r.elements)} != {nelem}")
+        if nelem > 0:
+            first, last = r.elements[0], r.elements[-1]
+            if first.code != fcode:
+                errs.append(f"首要素 {first.code} != {fcode}")
+            if fval is not None and not _value_eq(first.value, fval):
+                errs.append(f"首值 {first.value!r} != {fval!r}")
+            if last.code != lcode:
+                errs.append(f"末要素 {last.code} != {lcode}")
+            if lval is not None and not _value_eq(last.value, lval):
+                errs.append(f"末值 {last.value!r} != {lval!r}")
+        if errs:
             failed += 1
-    print(f"    {success} 通过, {failed} 失败")
-    assert failed == 0, f"有 {failed} 条福建报文解码失败"
-    assert success >= 20, f"至少 20 条, 实际 {success}"
+            print(f"    [第{i}条] {'; '.join(errs)}")
+    assert failed == 0, f"{name} 有 {failed} 条要素级断言失败"
+    print(f"    {len(lines)} 条要素级基线全部通过")
+
+
+def test_fujian_messages() -> None:
+    print(">>> 福建规定示例报文（CRC + 要素级基线）")
+    _check_baseline("福建", PROJECT_ROOT / "examples" / "fujian_messages.txt",
+                    FUJIAN_BASELINE)
     print("    OK")
 
 
 def test_beijing_messages() -> None:
-    print(">>> 北京水务报文验证")
-    sample_file = PROJECT_ROOT / "examples" / "beijing_messages.txt"
-    if not sample_file.exists():
-        print("    跳过（beijing_messages.txt 不存在）")
-        return
-    from sl651 import SL651Decoder
-    decoder = SL651Decoder()
-    success, failed = 0, 0
-    for line in sample_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        try:
-            r = decoder.decode_hex(line)
-            if r.crc_ok:
-                success += 1
-            else:
-                failed += 1
-        except Exception:
-            failed += 1
-    print(f"    {success} 通过, {failed} 失败")
-    assert failed == 0
-    assert success == 25, f"应为 25 条, 实际 {success}"
+    print(">>> 北京水务报文验证（CRC + 要素级基线）")
+    _check_baseline("北京", PROJECT_ROOT / "examples" / "beijing_messages.txt",
+                    BEIJING_BASELINE)
     print("    OK")
 
 
@@ -409,17 +472,26 @@ def test_negative_bcd() -> None:
 
 
 def test_invalid_bcd_graceful() -> None:
+    """无效 BCD 降级为 '-'（构造 CRC 正确的帧，避免弱断言）"""
     print(">>> 无效BCD数据优雅降级")
-    hex_msg = ("7E7E253A41BB2337ABCD32001802ABCD230601010104"
-               "F1F13A41BB23374BF0F02306010100"
-               "20FFFFFF2600FF99003812FF0003E2B0")
-    from sl651 import SL651Decoder
-    r = SL651Decoder().decode_hex(hex_msg)
-    # 无效 BCD 帧不崩溃，要素列表为空或含无效标记
-    assert not r.crc_ok, "畸形帧 CRC 不应通过"
-    assert isinstance(r.elements, list)
-    print(f"    CRC: {r.crc_ok}, 要素: {len(r.elements)}")
-    print("    OK")
+    enc = SL651Encoder(center_addr=1, station_addr="00418D2337",
+                       password=0, station_type=0x48)
+    frame = bytearray(enc.build_timing_frame(
+        [(0x39, 12.345, 4, 3)], obs_time=datetime(2023, 3, 8, 11, 14)))
+    # 定位要素数据区并写入非法 BCD 半字节，再重算 CRC 使 CRC 通过
+    body_len = ((frame[11] & 0x0F) << 8) | frame[12]
+    etx = 14 + body_len
+    frame[39] = 0xAB  # 水位数据首字节高半字节 A 非法
+    crc = crc16(bytes(frame[:etx + 1]))
+    frame[etx + 1] = (crc >> 8) & 0xFF
+    frame[etx + 2] = crc & 0xFF
+
+    r = SL651Decoder().decode(bytes(frame))
+    assert r.crc_ok, "重算 CRC 后应通过"
+    wl = [e for e in r.elements if e.code == "39"]
+    assert wl, "应解析出水位要素"
+    assert wl[0].value == "-", f"非法 BCD 应降级为 '-', 实际 {wl[0].value!r}"
+    print(f"    CRC: {r.crc_ok}, 水位值: {wl[0].value!r} OK")
 
 
 def test_simulator_engine_smoke() -> None:
@@ -790,18 +862,30 @@ def test_alert_edge_trigger() -> None:
 
     station = RainStation("1234567892")
     enc = SL651Encoder(station_addr="1234567892", station_type=0x50)
-    runner = StationRunner(station, enc, FakeSender(), interval=0.01,
+    runner = StationRunner(station, enc, FakeSender(), interval=0.0,
                            enable_alert=True)
     station.rain_gen.raining = True
     station.rain_gen.rain_remaining_minutes = 9999
-    # 直接驱动 _run 逻辑一个周期过于复杂，改为验证引擎的边沿判定语义：
-    # 模拟 is_raining 持续 True 时 _alert_active 阻止重复触发
-    runner._alert_active = False
-    first = bool(station.is_raining) and not runner._alert_active
-    runner._alert_active = bool(station.is_raining)
-    second = bool(station.is_raining) and not runner._alert_active
-    assert first and not second, "边沿触发失效"
-    print("    OK")
+
+    # 驱动真实 _run 路径：重写 _stop.wait 让循环执行 3 个周期后停止
+    cycles = {"n": 0}
+
+    def fake_wait(_timeout):
+        cycles["n"] += 1
+        if cycles["n"] >= 3:
+            runner._stop.set()
+
+    runner._stop.wait = fake_wait  # type: ignore[method-assign]
+    runner._run()
+
+    from sl651 import SL651Decoder
+    decoder = SL651Decoder()
+    funcs = [decoder.decode_hex(h).function_code for h in sent]
+    timing = funcs.count(0x32)
+    alarms = funcs.count(0x33)
+    assert timing == 3, f"应发送 3 条定时报, 实际 {timing}"
+    assert alarms == 1, f"持续降雨应只加报 1 次, 实际 {alarms}"
+    print(f"    3 周期: 定时报={timing}, 加报={alarms} OK")
 
 
 # ---------- v1.2.5 补充修复回归测试（R1~R5） ----------
@@ -911,6 +995,167 @@ def test_sl427_invalid_nibble_time() -> None:
     print("    OK")
 
 
+# ---------- v1.2.7 审计 v2.2 缺陷回归测试 ----------
+
+def test_sl651_uniform_report() -> None:
+    """C-1: 0x31 均匀报数据组重复格式（标识符组一次 + 多组数据）"""
+    print(">>> SL651 0x31 均匀报数据组")
+    hex_frame = (
+        "7E7E011000000006000031004E022F7E221205110019F1F1100000000648F0F02212"
+        "0510050418000005392300028960000289600002896000028960000289600002896"
+        "0000289600002896000028960000289600002896000028960035B947E"
+    )
+    r = SL651Decoder().decode_hex(hex_frame)
+    assert r.crc_ok and r.function_code == 0x31
+    wl = [e for e in r.elements if e.code == "39"]
+    assert len(wl) == 12, f"应解析 12 组水位, 实际 {len(wl)}"
+    assert all(_value_eq(e.value, 28.96) for e in wl), \
+        f"水位值应为 28.96: {[e.value for e in wl]}"
+    assert r.elements[0].code == "04" and r.elements[0].value == 5
+    print(f"    时间步长+12 组水位 OK (共 {len(r.elements)} 要素)")
+
+
+def test_sl651_f5_fixed_length() -> None:
+    """M-1: F5 定义符失配时按规范固定 24B 解析，不产生垃圾要素"""
+    print(">>> SL651 F5 固定长度解析")
+    hex_frame = (
+        "7E7E100012345678123434003A020003140612020000F1F1001234567848F0F01406"
+        "120200F55C0AAA0AAAFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF391A002730"
+        "3812129003ADF77E"
+    )
+    r = SL651Decoder().decode_hex(hex_frame)
+    assert r.crc_ok
+    f5 = [e for e in r.elements if e.code == "F5"]
+    assert len(f5) == 12, f"F5 应解析 12 组, 实际 {len(f5)}"
+    assert not any(e.code in ("2D", "0A", "EC") for e in r.elements), \
+        f"不应出现垃圾要素: {[e.code for e in r.elements]}"
+    assert any("F5" in w for w in r.warnings), f"应记录定义符失配告警: {r.warnings}"
+    print(f"    F5=12 组, 告警={r.warnings} OK")
+
+
+def test_sl427_84_no_tp() -> None:
+    """M-2: AFN=84H 自报帧数据域仅 2B 电压（规范表B.98 无 Tp），API 不再声明 tp"""
+    print(">>> SL427 AFN=0x84 自报帧无 Tp")
+    from sl427 import SL427Encoder, SL427Decoder, encode_address
+    addr = encode_address(method=1, admin_code=110108, stn_id=1284)
+    enc = SL427Encoder(addr)
+    f = enc.build_self_report_84(voltage=12.3)
+    r = SL427Decoder().decode(f)
+    assert r.crc_ok and r.afn == 0x84
+    assert len(r.elements) == 1, f"应仅 1 个电压要素: {[e.name for e in r.elements]}"
+    assert r.elements[0].name == "电压"
+    assert abs(float(r.elements[0].value) - 12.3) < 0.01
+    assert not any(e.name == "观测时间" for e in r.elements), "84H 自报帧不应含 Tp"
+    print(f"    {r.elements[0].value}V (无 Tp) OK")
+
+
+def test_sl651_bcd_overflow_contract() -> None:
+    """M-3: SL651 BCD 超限统一抛 EncodeError"""
+    print(">>> SL651 BCD 超限异常契约")
+    from sl651.encoder import EncodeError
+    enc = SL651Encoder(center_addr=1, station_addr="00418D2337")
+    try:
+        enc.build_timing_frame([(0x39, 123456789.0, 4, 3)])
+        raise AssertionError("BCD 超限应抛 EncodeError")
+    except EncodeError:
+        pass
+    print("    OK")
+
+
+def test_sl427_bcd_overflow_contract() -> None:
+    """M-3: SL427 BCD 超限统一抛 EncodeError"""
+    print(">>> SL427 BCD 超限异常契约")
+    from sl427 import SL427Encoder, encode_address
+    from sl427.encoder import EncodeError
+    enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
+    for fn in (lambda: enc.build_self_report_84(voltage=999.99),
+               lambda: enc.build_set_recharge(amount=-1),
+               lambda: enc.build_param_set_frame(0x10, 0x00, b"\x01", pw=1000)):
+        try:
+            fn()
+            raise AssertionError("超限应抛 EncodeError")
+        except EncodeError:
+            pass
+    print("    OK")
+
+
+def test_sl651_body_len_limit() -> None:
+    """M-5: 正文长度 >4095 抛 EncodeError，不再静默掩码"""
+    print(">>> SL651 正文长度上限")
+    from sl651.encoder import EncodeError
+    enc = SL651Encoder(center_addr=1, station_addr="00418D2337")
+    try:
+        enc.build_frame(0x32, b"\x00" * 5000)
+        raise AssertionError("正文超限应抛 EncodeError")
+    except EncodeError:
+        pass
+    try:
+        enc.build_ascii_frame([("Z", "1.0")] * 2000)
+        raise AssertionError("ASCII 正文超限应抛 EncodeError")
+    except EncodeError:
+        pass
+    print("    OK")
+
+
+def test_sl427_short_data_degrade() -> None:
+    """L-3: C0 短数据域不再静默返回 0 要素"""
+    print(">>> SL427 C0 短数据域降级")
+    from sl427 import SL427Encoder, SL427Decoder, encode_address
+    from sl427 import constants as SC
+    from sl651.bcd import int_to_bcd_bytes
+    enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
+    data = bytes(reversed(int_to_bcd_bytes(12345, 4)))
+    f = enc.build_frame(0xC0, SC.make_ctrl(dir_=1, func_code=0x02), data)
+    r = SL427Decoder().decode(f)
+    assert r.crc_ok
+    assert len(r.elements) > 0, "短数据域不应静默返回 0 要素"
+    assert any("降级" in w for w in r.warnings), f"应记录降级告警: {r.warnings}"
+    print(f"    短数据域解析 {len(r.elements)} 要素, 告警={r.warnings} OK")
+
+
+def test_sl427_addr_method() -> None:
+    """L-4: 地址方式判定（方式1 省码 11~82，BYTE1=00H 为方式2）"""
+    print(">>> SL427 地址方式判定")
+    from sl427.decoder import _format_addr
+    a1 = _format_addr(bytes.fromhex("1101080405"))
+    assert a1.startswith("方式1"), f"应为方式1: {a1}"
+    assert "110108" in a1 and "1284" in a1, f"行政区划/站址错误: {a1}"
+    a2 = _format_addr(bytes.fromhex("0012345678"))
+    assert a2.startswith("方式2"), f"应为方式2: {a2}"
+    print(f"    {a1} | {a2} OK")
+
+
+def test_sl651_ascii_uniform() -> None:
+    """0x31 ASCII 均匀报：时间步长码 DRxnn + 单标识符多值数组"""
+    print(">>> SL651 0x31 ASCII 均匀报")
+    from sl651 import constants as C
+    body_ascii = (
+        "ST 1000000006 48 TT 2205100500 DRN05 005 "
+        "DRZ1 28.96 28.96 28.97 28.98 28.99 29.00 "
+        "29.01 29.02 29.03 29.04 29.05 29.06"
+    ).encode("ascii")
+    body = b"0001" + b"220510050000" + body_ascii
+    body_len = 4 + 12 + len(body_ascii)
+    ident_hi = (0 << 7) | ((body_len >> 8) & 0x0F)
+    frame = bytearray([C.SOH])
+    frame.extend(b"01" + b"1000000006" + b"0000" + b"31")
+    frame.extend(f"{ident_hi:02X}{body_len & 0xFF:02X}".encode("ascii"))
+    frame.append(C.STX)
+    frame.extend(body)
+    frame.append(C.ETX)
+    frame.extend(f"{crc16(bytes(frame)):04X}".encode("ascii"))
+
+    r = SL651Decoder().decode(bytes(frame))
+    assert r.crc_ok and r.function_code == 0x31 and r.encoding == "ASCII"
+    ts = [e for e in r.elements if e.code == "DRN05"]
+    assert ts and ts[0].value == 5, f"时间步长码未识别: {[e.code for e in r.elements]}"
+    assert "分钟" in ts[0].name, f"步长单位错误: {ts[0].name}"
+    wl = [e for e in r.elements if e.code == "DRZ1"]
+    assert len(wl) == 12, f"应解析 12 组水位, 实际 {len(wl)}"
+    assert _value_eq(wl[0].value, 28.96) and _value_eq(wl[-1].value, 29.06)
+    print(f"    时间步长+{len(wl)} 组水位 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 工具包自测")
@@ -939,6 +1184,11 @@ def main() -> int:
         test_sl427_signed_bcd_invalid_nibble, test_sl427_invalid_time_display,
         test_sl427_invalid_nibble_time, test_sl651_f3_image_display,
         test_sl651_ascii_reserved_id,
+        test_sl651_uniform_report, test_sl651_f5_fixed_length,
+        test_sl427_84_no_tp, test_sl651_bcd_overflow_contract,
+        test_sl427_bcd_overflow_contract, test_sl651_body_len_limit,
+        test_sl427_short_data_degrade, test_sl427_addr_method,
+        test_sl651_ascii_uniform,
     ]
     for test in tests:
         try:

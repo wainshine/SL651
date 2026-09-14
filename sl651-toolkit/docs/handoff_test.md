@@ -2,7 +2,7 @@
 
 > 角色：业务测试1代  
 > 接棒时间：2026-07-01  
-> 基线版本：v1.2.6  
+> 基线版本：v1.2.7  
 > 接手前必读：`docs/project.md` + `README.md` + `docs/handoff_main.md` + 本文档
 
 ---
@@ -12,9 +12,9 @@
 ### 1.1 一次性运行结果
 
 ```
-44/44 项测试全部通过
-福建 23 条真实报文 CRC 全通过
-北京 25 条真实报文 CRC 全通过
+53/53 项测试全部通过
+福建 23 条真实报文 CRC + 要素级基线全通过
+北京 25 条真实报文 CRC + 要素级基线全通过
 ```
 
 ```bash
@@ -28,6 +28,7 @@ python3 tests/test_sl651.py
 |------|----------|----------|----------|
 | v1.1~v1.7 | `audit/audit_report_v1.*.md` | 累计 ~20 项缺陷全部修复 | 24 项测试通过 |
 | **v1.8** | `audit/audit_report_v1.8.md` | **C-1: 模拟器引擎致命 bug (AttributeError)**, M-1: 小时报不校验, M-2: 充值量 BCD 字节序 | **v1.8 发现的全 6 项已修复** / 3 项盲区覆盖测试已新增 |
+| **v2.2** | `audit/audit_report_v2.2.md` | **C-1: 0x31 均匀报丢失 11/12 组**, M-1: F5 定义符失配截断, M-4: 真实报文仅验 CRC | **v1.2.7 已全部修复**；真实报文增加要素级基线（52 项测试） |
 
 ### 1.3 缺陷跟踪表（v1.8 基准，已全闭环）
 
@@ -38,7 +39,7 @@ python3 tests/test_sl651.py
 | M-2 | Medium | `sl427/encoder.py:238` | 充值量 BCD 大端→应为小端 LE | ✅ 已修复（`bytes(reversed(...))`） |
 | L-1 | Low | `tests/test_sl651.py:353` | `test_invalid_bcd_graceful` 无 assert | ✅ 已修复（加入 assert） |
 | L-2 | Low | `simulator/engine.py:110` | `add_station` 形参 `station_type` 死参数 | ✅ 已修复 |
-| L-3 | Low | `docs/project.md:309` | 测试计数仍写"21 项"，实际 24 项 | 待同步 |
+| L-3 | Low | `docs/project.md` §7.1 | 测试计数已同步为 **52 项**（v1.2.7） | ✅ 已同步 |
 
 ---
 
@@ -74,7 +75,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 ## 三、测试用例清单
 
-### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 44 项清单见 `docs/project.md` §7.1）
+### 3.1 `tests/test_sl651.py` 24 项全览（v1.1 基线快照；最新 53 项清单见 `docs/project.md` §7.1）
 
 | 序号 | 测试函数 | 协议 | 覆盖点 | 类型 |
 |------|----------|------|--------|------|
@@ -193,9 +194,9 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 
 | 条件 | 预期 | 验证方式 |
 |------|------|----------|
-| 44 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
-| 福建 23 条 | CRC 100% | `python3 tools/decode_cli.py sl651 --file examples/fujian_messages.txt` |
-| 北京 25 条 | CRC 100% | `python3 tools/decode_cli.py sl651 --file examples/beijing_messages.txt` |
+| 53 项测试 | 全部通过 | `python3 tests/test_sl651.py` |
+| 福建 23 条 | CRC 100% + 要素级基线 | `python3 tools/decode_cli.py sl651 --file examples/fujian_messages.txt` |
+| 北京 25 条 | CRC 100% + 要素级基线 | `python3 tools/decode_cli.py sl651 --file examples/beijing_messages.txt` |
 | CRC16 验证向量 | `crc16(b"123456789") == 0x4B37` | test_crc |
 | CRC8 验证向量 | `crc8(b"\x00\x01\x02") == 0xA6` | test_crc8 |
 | 定义符解析 | `parse_def_byte(0x23) == (4,3)` | test_def_byte |
@@ -208,10 +209,10 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 |------|------|------|----------|
 | P1-TODO | `sl427/constants.py:98` | 0x0D 在多上下文含义不同（下行=报警, 上行=雨量, AFN=84H=电压），标签不统一 | 不影响编解码，仅标签歧义 |
 | P2-远期 | `sl427/constants.py:130` | AFN_NO_AUX/AFN_TP_ONLY/AFN_PW_TP 三组常量已定义但无人引用 | 无影响 |
-| P2-远期 | `sl427/constants.py:102` | COMP_BITS 气象映射 D3 位未含气压(0x07),仅含风速(0x08) | 不影响解析 |
+| P2-远期 | `sl427/constants.py:106` | COMP_BITS[3]=0x07 表示气象（含气压），非风速；v1.9 M-7 已修正 | 不影响解析 |
 | P2-远期 | Roadmap | 多包 (SYN/ETB) 拼接重组 | 当前可解码单帧多包 |
 | P2-远期 | Roadmap | SL427 参数设置全量 AFN (~30个变长格式) | 当前通用模板+6便捷方法 |
-| L-3 | `docs/project.md:309` | 测试计数"21 项"(实际 24 项) | 仅文档不一致 |
+| L-3 | `docs/project.md` §7.1 | 测试计数已同步为 52 项（v1.2.7） | 已解决 |
 
 ---
 
@@ -248,7 +249,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 | SL427 AFN=0x81往返 | ✅ | CRC通过, 仅3要素(电压+2×原始字节), 无alarm/state/Tp → **D-1** |
 | SL427 AFN=0x82往返 | ✅ | 同上 |
 | SL427 AFN=0x84往返+值验证 | ⚠️ | CRC通过；只解出1要素"电压"，无alarm/state/Tp → **D-1** |
-| SL427 AFN=0x12四种模式 | ✅ | 0=自报/1=查询/2=兼容/3=调试 全部通过 |
+| SL427 AFN=0x12四种模式 | ✅ | 0=兼容/1=自报/2=查询/3=调试 全部通过 |
 | 充值量数值级验证 | ✅ | hex正确输出（34120000=1234 LE），但与解码器无往返验证 |
 | 异常输入（空/非法/奇数/非7E） | ✅ | 全部正确抛 DecodeError |
 | ASCII特殊值（零值/负数） | ✅ | 正确解码 |
@@ -296,6 +297,48 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 - 福建 23 条 + 北京 25 条 CRC 全通过 ✅
 - D-2/D-3 修复验证通过 ✅
 - D-1 修复验证：alarm/state/Tp 已能解析 ✅，电压值计算错误 ❌
+
+---
+
+## 十二、第三轮回归测试 — R-1/R-2/R-3 修复验证
+
+> 测试时间：2026-07-01 | `git diff HEAD~1`
+
+### 12.1 变更确认
+
+| 修复 | 变更 | diff 行 |
+|------|------|---------|
+| R-1 (电压值) | `int.from_bytes(volt_bytes, 'little')` → `bcd_bytes_to_int_le(volt_bytes) / 100` | `sl427/decoder.py` +2 |
+| R-2 (短数据) | AFN=84 新增 `else: volt_val = bcd_bytes_to_int_le(data_field) / 100` | `sl427/decoder.py` +6 |
+| R-3 (字节序) | `_parse_alarm`/`_parse_terminal` 中 `(data[0]<<8)\|data[1]` → `data[0]\|(data[1]<<8)` | `sl427/decoder.py` -2/+2 |
+
+### 12.2 验证结果
+
+| 测试项 | 结果 | 详情 |
+|--------|------|------|
+| 现有 24 项测试 | ✅ 全通过 | 无回归 |
+| 福建 23 + 北京 25 | ✅ CRC全通过 | |
+| R-1: 4 组电压值 | ✅ 全部正确 | 0/12.3/12.6/98.76 V 精确返回 |
+| R-2: 短数据降级 | ✅ | 仅 2B 电压 → 解出 1 要素 "电压 12.30V" |
+| R-3: alarm=0x0005 | ✅ bit0→停电, bit2→报警 | 14 alarm + 8 state 全部正确 |
+| R-3: state=0x0001 | ✅ 终端工作模式→自报确认 | 与编码值一致 |
+| SL427 AFN=0x81 | ✅ alarm/state/Tp 均已解析 | |
+| SL427 AFN=0x82 | ✅ alarm/state/Tp 均已解析 | |
+| SL427 AFN=0x84 | ✅ 电压+alarm+state+Tp 共计 21 要素 | |
+
+### 12.3 结论
+
+**D-1/D-2/D-3 及 R-1/R-2/R-3 全部修复验证通过。** 当前项目无已知缺陷。
+
+---
+
+## 十三、评估总结
+
+1. **协议核心算法稳健**：CRC16/MODBUS、CRC8(0xE5)、定义符解析、负数BCD、SL427 控制域/地址域/Tp 经 8 轮审计+48 条真实报文验证，可信度高。
+2. **D-2/D-3 修复到位**：小时报负数水位和 BCD 值类型问题已正确解决。
+3. **D-1 修复有回归**：AFN=84 分支用 `int.from_bytes` 替代 `bcd_bytes_to_int_le` 导致电压值换算错误（10×量级），需立即修正。同时缺少 else 分支处理短数据。
+4. **R-3 是隐藏较深的预先缺陷**：alarm/state 编解码字节序不一致，因测试用例 alarm=state=0 一直未暴露。影响所有 C0/81/82 有 alarm/state 数据的解码。
+5. **建议下一任优先处理**：R-1（D-1 回归，简单修）> R-3（alarm/state 字节序，影响面大）> R-2（边界降级，影响小）。
 
 ---
 
@@ -382,43 +425,3 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 - `test_round1_blindspots.py` 保持 10/10 全通过（M-12 修复保持有效）
 
 ---
-
-## 十二、第三轮回归测试 — R-1/R-2/R-3 修复验证
-
-> 测试时间：2026-07-01 | `git diff HEAD~1`
-
-### 12.1 变更确认
-
-| 修复 | 变更 | diff 行 |
-|------|------|---------|
-| R-1 (电压值) | `int.from_bytes(volt_bytes, 'little')` → `bcd_bytes_to_int_le(volt_bytes) / 100` | `sl427/decoder.py` +2 |
-| R-2 (短数据) | AFN=84 新增 `else: volt_val = bcd_bytes_to_int_le(data_field) / 100` | `sl427/decoder.py` +6 |
-| R-3 (字节序) | `_parse_alarm`/`_parse_terminal` 中 `(data[0]<<8)\|data[1]` → `data[0]\|(data[1]<<8)` | `sl427/decoder.py` -2/+2 |
-
-### 12.2 验证结果
-
-| 测试项 | 结果 | 详情 |
-|--------|------|------|
-| 现有 24 项测试 | ✅ 全通过 | 无回归 |
-| 福建 23 + 北京 25 | ✅ CRC全通过 | |
-| R-1: 4 组电压值 | ✅ 全部正确 | 0/12.3/12.6/98.76 V 精确返回 |
-| R-2: 短数据降级 | ✅ | 仅 2B 电压 → 解出 1 要素 "电压 12.30V" |
-| R-3: alarm=0x0005 | ✅ bit0→停电, bit2→报警 | 14 alarm + 8 state 全部正确 |
-| R-3: state=0x0001 | ✅ 终端工作模式→自报确认 | 与编码值一致 |
-| SL427 AFN=0x81 | ✅ alarm/state/Tp 均已解析 | |
-| SL427 AFN=0x82 | ✅ alarm/state/Tp 均已解析 | |
-| SL427 AFN=0x84 | ✅ 电压+alarm+state+Tp 共计 21 要素 | |
-
-### 12.3 结论
-
-**D-1/D-2/D-3 及 R-1/R-2/R-3 全部修复验证通过。** 当前项目无已知缺陷。
-
----
-
-## 十三、评估总结
-
-1. **协议核心算法稳健**：CRC16/MODBUS、CRC8(0xE5)、定义符解析、负数BCD、SL427 控制域/地址域/Tp 经 8 轮审计+48 条真实报文验证，可信度高。
-2. **D-2/D-3 修复到位**：小时报负数水位和 BCD 值类型问题已正确解决。
-3. **D-1 修复有回归**：AFN=84 分支用 `int.from_bytes` 替代 `bcd_bytes_to_int_le` 导致电压值换算错误（10×量级），需立即修正。同时缺少 else 分支处理短数据。
-4. **R-3 是隐藏较深的预先缺陷**：alarm/state 编解码字节序不一致，因测试用例 alarm=state=0 一直未暴露。影响所有 C0/81/82 有 alarm/state 数据的解码。
-5. **建议下一任优先处理**：R-1（D-1 回归，简单修）> R-3（alarm/state 字节序，影响面大）> R-2（边界降级，影响小）。

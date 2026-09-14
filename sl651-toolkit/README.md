@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.6
+# SL651 水文规约工具包 v1.2.7
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -45,7 +45,7 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── test_sl651.py           # 44 项自测
+│   ├── test_sl651.py           # 53 项自测
 │   └── test_round1_blindspots.py  # 10 项盲区测试
 ├── docs/
 │   └── project.md              # 项目规格说明书
@@ -151,7 +151,7 @@ for e in r.elements:
 | `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | 参数设置 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | 恢复出厂 |
-| `build_frame(func, body, ...)` | 任意 | 任意 | 可指定 | 通用帧构造 |
+| `build_frame(function_code, body, ...)` | 任意 | 任意 | 可指定 | 通用帧构造（正文 >4095 抛 EncodeError） |
 
 ### 2.2 SL427 编码
 
@@ -161,9 +161,9 @@ for e in r.elements:
 | `build_self_report_c0(func, data)` | 0xC0 | 上行 | 自报实时数据 |
 | `build_self_report_81(func, data)` | 0x81 | 上行 | 自报告警 |
 | `build_self_report_82(func, data)` | 0x82 | 上行 | 人工置数 |
-| `build_self_report_84(voltage)` | 0x84 | 上行 | 自报电压 |
+| `build_self_report_84(voltage)` | 0x84 | 上行 | 自报电压（表B.98，无 Tp） |
 | `build_query_response(func, data)` | 0xB0 | 上行 | 查询响应 |
-| `build_param_set_frame(afn, func, data)` | 10~4F | 下行 | 通用参数设置 |
+| `build_param_set_frame(afn, func, data, pw, tp, key1)` | 10~4F | 下行 | 通用参数设置 |
 | `build_set_addr(bytes)` | 0x10 | 下行 | 设置站址 |
 | `build_set_clock(dt)` | 0x11 | 下行 | 设置时钟 |
 | `build_set_work_mode(mode)` | 0x12 | 下行 | 设置工作模式 |
@@ -217,12 +217,23 @@ python web/app.py
 ```bash
 python tests/test_sl651.py
 
-# 44 项测试全部通过（另含 10 项盲区测试；23 条福建 + 25 条北京真实报文 CRC 验证）
+# 53 项测试全部通过（另含 10 项盲区测试；23 条福建 + 25 条北京真实报文 CRC + 要素级验证）
 ```
 
 ---
 
 ## 五、版本历史
+
+- **v1.2.7**：审计 v2.2 修复版（1C+5M+7L 缺陷修复 + 真实报文要素级测试）
+  - C-1: 0x31 均匀报实现「标识符组一次 + 多组重复数据」解析（福建帧恢复 12/12 组，原丢失 11 组）
+  - M-1: F4/F5~FC 数组按规范固定 12B/24B 解析，不再采信失配定义符；不符时写入 `warnings`，消除截断与垃圾要素
+  - M-2: SL427 84H 自报帧按规范表B.98 修正为「仅 2B 电压、无 Tp」，移除误导性的 `tp` 参数与对应解码分支（审计原述与规约冲突，以规约 B.98 为准）
+  - M-3: BCD 值超限统一抛 `EncodeError`（SL651/SL427，原泄漏 `ValueError`）
+  - M-4: 福建 23 条 / 北京 25 条真实报文增加「要素总数 + 首末要素值」基线断言（原仅验 CRC）
+  - M-5: `build_frame`/`build_ascii_frame` 校验正文 ≤4095，超限抛 `EncodeError`（原静默掩码）
+  - L: 加报边沿测试驱动真实 `_run`；无效 BCD 降级断言强化；SL427 短数据域降级；地址方式判定文档化；死常量标注；PW key1/溢出校验
+  - 收尾: SL427 `DecodedMessage` 增加 `warnings` 通道（短数据域降级可见）；0x31 ASCII 均匀报识别时间步长码 `DRxnn` 并支持单标识符多值数组
+  - 文档一致性 D-1~D-11 修正；测试 44 → 53 项
 
 - **v1.2.6**：主会话 4 代自审计修复版（文档一致性修正 + 3 项缺陷修复）
   - 文档：根 README/toolkit README/handoff_test 测试计数滞后修正（24/25 → 44 项）、handoff_main 行号漂移 2 处、sl651 README 参数名 `func` → `function_code`

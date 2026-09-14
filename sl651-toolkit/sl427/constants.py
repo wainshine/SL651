@@ -59,6 +59,7 @@ AFN_MAP: dict[int, str] = {
 }
 
 # AFN 数据域字节数（仅固定长度或无命令帧）
+# 注：文档保留常量，供调用方校验/参考；编解码器按各便捷方法内联长度，未直接引用。
 AFN_DATA_LEN: dict[int, int | None] = {
     0x10: 5,    # 设置地址: 5B
     0x11: 6,    # 设置时钟: 6B BCD
@@ -132,6 +133,7 @@ TERMINAL_BITS = [
 ]
 
 # AFN 类别：无AUX / 仅Tp / PW+Tp
+# 注：文档保留常量（handoff 设计保留项），编解码器在调用处按 AFN 内联 AUX 逻辑。
 AFN_NO_AUX = {0x02}
 AFN_TP_ONLY = {0xC0, 0x81, 0x82, 0xFF}  # 0x83/0x84 按 B.96/B.98 不含 Tp
 AFN_PW_TP = {0x10, 0x11}  # 参数设置类

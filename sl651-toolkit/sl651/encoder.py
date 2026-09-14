@@ -36,10 +36,15 @@ def _encode_bcd(value: float, data_len: int, decimals: int) -> bytes:
     if negative and data_len < 2:
         raise EncodeError(f"负数编码至少需要 2 字节（0xFF 前缀 + 数据），当前 data_len={data_len}")
     scaled = round(abs(value) * (10 ** decimals))
-    if negative:
-        bcd = int_to_bcd_bytes(scaled, data_len - 1)
-        return b"\xFF" + bcd
-    return int_to_bcd_bytes(scaled, data_len)
+    try:
+        if negative:
+            bcd = int_to_bcd_bytes(scaled, data_len - 1)
+            return b"\xFF" + bcd
+        return int_to_bcd_bytes(scaled, data_len)
+    except ValueError as e:
+        raise EncodeError(
+            f"BCD 值超范围 (value={value}, data_len={data_len}, decimals={decimals}): {e}"
+        ) from e
 
 
 class SL651Encoder:
@@ -110,6 +115,10 @@ class SL651Encoder:
             serial = self._serial
 
         body_len = C.SERIAL_LEN + C.TX_TIME_LEN + len(body)
+        if body_len > 4095:
+            raise EncodeError(
+                f"正文长度超范围(报文标识仅 12 位, ≤4095 字节): {body_len}"
+            )
         ident_hi = (direction << 7) | ((body_len >> 8) & 0x0F)
         ident_lo = body_len & 0xFF
 
@@ -411,6 +420,10 @@ class SL651Encoder:
         body_stx_etx = serial_hex + tx_time_hex + body_ascii
 
         body_len = C.ASCII_SERIAL_LEN + C.ASCII_TX_TIME_LEN + len(body_ascii)
+        if body_len > 4095:
+            raise EncodeError(
+                f"ASCⅡ 正文长度超范围(报文标识仅 12 位, ≤4095 字节): {body_len}"
+            )
         ident_hi = (C.DIR_UPLINK << 7) | ((body_len >> 8) & 0x0F)
         ident_lo = body_len & 0xFF
 

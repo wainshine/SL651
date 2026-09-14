@@ -56,6 +56,7 @@ class DecodedMessage:
     special_info: dict | None = None
     byte_map: str = ""
     frame_length: int = 0
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +74,7 @@ class DecodedMessage:
             ],
             "frame_length": self.frame_length,
             "data_len": self.data_len,
+            "warnings": list(self.warnings),
         }
 
 
@@ -285,6 +287,10 @@ def _format_addr(addr: bytes) -> str:
 
     方式1: A1=3B BCD(行政区划码) + A2=2B BIN(站址, 小端)
     方式2: BYTE1=00H + BYTE2~5=8位HEX监测站编码(nibble-packed)
+
+    判定依据（规约 §6.3.3.4 表7/表8）：方式1 行政区划码 A1 为 6 位十进制，
+    前两位为省码（GB/T2260 规定为 11~82），故 A1 首字节恒 ≥ 0x11，不可能为 00H。
+    因此 BYTE1=00H 可靠判定为方式2，不存在方式1 被误判的边界。
     """
 
     if addr[0] == 0x00:
@@ -386,9 +392,11 @@ class SL427Decoder:
         data_field = bytes(bytes_list[offset: cs_pos])
         addr_display = _format_addr(addr_bytes)
 
+        self._warnings = []
         elements, special_info = self._parse_data_field(
             afn, ctrl, data_field
         )
+        warnings = self._warnings
 
         byte_map = _build_byte_map(bytes_list)
 
@@ -408,6 +416,7 @@ class SL427Decoder:
             special_info=special_info,
             byte_map=byte_map,
             frame_length=total,
+            warnings=warnings,
         )
 
     def _parse_data_field(
@@ -462,6 +471,16 @@ class SL427Decoder:
                     raw=bytes_to_hex_compact(tp_bytes),
                     is_time=True, byte_len=C.TP_LEN,
                 ))
+            else:
+                # 数据域不足 D+alarm+state+Tp，降级按功能码解析现有数据
+                self._warnings.append(
+                    f"AFN=C0 数据域仅 {raw_len} 字节（<{C.TP_LEN + 4}），"
+                    "缺少 alarm/state/Tp，按现有数据降级解析"
+                )
+                if func_code == 0x0E:
+                    elements.extend(_parse_statistical_rainfall(data_field))
+                else:
+                    elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
         elif afn_hex == "b0":
             # 查询响应：data + alarm(2B) + state(2B)（规范7.3.22）
@@ -517,38 +536,28 @@ class SL427Decoder:
                     is_time=True, byte_len=C.TP_LEN,
                 ))
             else:
-                elements.extend(_parse_ctrl_func_data(func_code, data_field))
+                self._warnings.append(
+                    f"AFN={afn:02X}H 数据域仅 {raw_len} 字节（<{C.TP_LEN + 4}），"
+                    "缺少 alarm/state/Tp，按现有数据降级解析"
+                )
+                if func_code == 0x0E:
+                    elements.extend(_parse_statistical_rainfall(data_field))
+                else:
+                    elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
         elif afn_hex == "84":
-            raw_len = len(data_field)
-            if raw_len >= C.TP_LEN + 4 and len(data_field) >= 2:
-                tp_bytes = data_field[-C.TP_LEN:]
-                state_bytes = data_field[-C.TP_LEN - 2:-C.TP_LEN]
-                alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
-                volt_bytes = data_field[:-C.TP_LEN - 4]
-                if volt_bytes:
-                    volt_val = bcd_bytes_to_int_le(volt_bytes) / 100
-                    elements.append(ElementValue(
-                        name="电压", value=f"{volt_val:.2f}", unit="V",
-                        raw=bytes_to_hex_compact(volt_bytes),
-                        byte_len=len(volt_bytes), decimal=2,
-                    ))
-                elements.extend(_parse_alarm(alarm_bytes))
-                elements.extend(_parse_terminal(state_bytes))
-                tp_str = _fmt_time_427(tp_bytes)
+            # 自报电压: 规范表B.98 自报帧数据域仅 2B BCD 电压（低位在前），无 alarm/state/Tp
+            if len(data_field) >= 2:
+                volt_val = bcd_bytes_to_int_le(data_field[:2]) / 100
                 elements.append(ElementValue(
-                    name="观测时间", value=tp_str, unit="",
-                    raw=bytes_to_hex_compact(tp_bytes),
-                    is_time=True, byte_len=C.TP_LEN,
+                    name="电压", value=f"{volt_val:.2f}", unit="V",
+                    raw=bytes_to_hex_compact(data_field[:2]),
+                    byte_len=2, decimal=2,
                 ))
             else:
-                if len(data_field) >= 2:
-                    volt_val = bcd_bytes_to_int_le(data_field[:2]) / 100
-                    elements.append(ElementValue(
-                        name="电压", value=f"{volt_val:.2f}", unit="V",
-                        raw=bytes_to_hex_compact(data_field[:2]),
-                        byte_len=2, decimal=2,
-                    ))
+                self._warnings.append(
+                    f"AFN=84H 数据域仅 {len(data_field)} 字节，不足 2B 电压，无法解析"
+                )
 
         elif afn_hex == "ff":
             # FFH 用户自定义扩展：按 AFN_TP_ONLY 声明含尾部 Tp(7B)，剥离后再解析数据域

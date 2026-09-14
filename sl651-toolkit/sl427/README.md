@@ -36,6 +36,7 @@ r = decoder.decode(frame_bytes)      # bytes
 | `crc_ok` | `bool` | CRC8 校验结果 |
 | `elements` | `list[ElementValue]` | 要素列表 |
 | `special_info` | `dict` | 特殊信息（心跳类型、图像数据等） |
+| `warnings` | `list[str]` | 非致命解析告警（如 C0/81/82 数据域过短降级解析） |
 | `to_dict()` | `dict` | 转为字典 |
 
 ### `SL427Encoder`
@@ -55,7 +56,7 @@ enc = SL427Encoder(addr)
 | `build_self_report_c0(func_code, data, tp, alarm, state)` | 0xC0 | 自报实时数据 |
 | `build_self_report_81(func_code, data, tp, alarm, state)` | 0x81 | 自报告警 |
 | `build_self_report_82(func_code, data, tp, alarm, state)` | 0x82 | 人工置数 |
-| `build_self_report_84(voltage, tp)` | 0x84 | 自报电压 |
+| `build_self_report_84(voltage)` | 0x84 | 自报电压（表B.98，无 Tp） |
 | `build_query_response(func_code, data)` | 0xB0 | 查询响应 |
 
 **下行帧方法**:
@@ -68,7 +69,7 @@ enc = SL427Encoder(addr)
 | `build_set_recharge(amount, pw)` | 0x15 | 设置充值量 |
 | `build_set_ic_card_on(pw)` | 0x30 | IC卡功能有效 |
 | `build_set_ic_card_off(pw)` | 0x31 | 取消IC卡功能 |
-| `build_param_set_frame(afn, func_code, data, pw, tp)` | 10~4F | 通用参数设置模板 |
+| `build_param_set_frame(afn, func_code, data, pw, tp, key1)` | 10~4F | 通用参数设置模板 |
 
 ### 辅助函数
 

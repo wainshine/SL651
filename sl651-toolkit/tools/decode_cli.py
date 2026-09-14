@@ -51,6 +51,8 @@ def format_sl651(result) -> str:
         f"CRC 校验      : {'通过' if result.crc_ok else '失败'} "
         f"(接收=0x{result.crc_received:04X}, 计算=0x{result.crc_calculated:04X})"
     )
+    for w in getattr(result, "warnings", []) or []:
+        lines.append(f"告警          : {w}")
     lines.append("-" * 72)
     if result.elements:
         lines.append(f"要素数据 ({len(result.elements)} 项):")
@@ -80,6 +82,8 @@ def format_sl427(result) -> str:
         f"CRC8 校验     : {'通过' if result.crc_ok else '失败'} "
         f"(接收=0x{result.crc_recv:02X}, 计算=0x{result.crc_calc:02X})"
     )
+    for w in getattr(result, "warnings", []) or []:
+        lines.append(f"告警          : {w}")
     lines.append("-" * 72)
     if result.special_info:
         if result.special_info.get("type") == "heart":

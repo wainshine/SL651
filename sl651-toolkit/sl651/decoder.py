@@ -66,6 +66,7 @@ class DecodedMessage:
     raw_frame: bytes = b""
     frame_length: int = 0
     message_type: str = ""  # 从功能码推导的报文类型，如 "定时报"、"加报报"
+    warnings: list[str] = field(default_factory=list)  # 非致命解析告警（如定义符与规范不符）
 
     def to_dict(self) -> dict:
         return {
@@ -91,6 +92,7 @@ class DecodedMessage:
                 for el in self.elements
             ],
             "frame_length": self.frame_length,
+            "warnings": list(self.warnings),
         }
 
 
@@ -114,6 +116,21 @@ def _fmt_bcd_time_nosec(hex_str: str) -> str:
         return f"20{s[0:2]}-{s[2:4]}-{s[4:6]} {s[6:8]}:{s[8:10]}"
     except (ValueError, IndexError):
         return hex_str
+
+
+def _ascii_time_step_desc(code: str) -> str | None:
+    """识别 ASCII 时间步长码 DRxnn（x=D/H/N，nn=取值范围，规约表C.2）。
+
+    返回描述（含单位），非时间步长码返回 None。表 C.1 中标识符写作 DRxnn，
+    实际报文中 x 为 D/H/N 之一。
+    """
+    c = code.upper()
+    if c == "DRXNN":
+        return "时间步长码"
+    if len(c) == 5 and c.startswith("DR") and c[2] in ("D", "H", "N") and c[3:].isdigit():
+        unit = {"D": "日", "H": "小时", "N": "分钟"}[c[2]]
+        return f"时间步长码({unit})"
+    return None
 
 
 def _safe_bcd_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
@@ -449,11 +466,12 @@ class SL651Decoder:
         obs_display = _fmt_bcd_time_nosec(obs_hex) if obs_hex else ""
         tx_display = _fmt_bcd_time_sec(tx_hex)
 
+        warnings: list[str] = []
         data_bytes = bytes(bytes_list[data_start:etx_pos])
         if is_ascii:
             elements = self._parse_ascii_elements(data_bytes)
         else:
-            elements = self._parse_elements(data_bytes)
+            elements, warnings = self._parse_elements(data_bytes, func)
 
         byte_map = _build_byte_map(bytes_list, direction, etx_pos, syn_pad)
         byte_table = _build_byte_table(bytes_list, direction, etx_pos, syn_pad)
@@ -486,14 +504,19 @@ class SL651Decoder:
             byte_table=byte_table,
             raw_frame=frame,
             frame_length=total,
+            warnings=warnings,
         )
 
-    def _parse_elements(self, data: bytes) -> list[ElementValue]:
+    def _parse_elements(
+        self, data: bytes, function_code: int = 0
+    ) -> tuple[list[ElementValue], list[str]]:
+        warnings: list[str] = []
         if not data:
-            return []
+            return [], warnings
         hex_str = bytes_to_hex_compact(data).lower()
         elements: list[ElementValue] = []
         pos = 0
+        is_uniform = function_code == 0x31
 
         while pos + 4 <= len(hex_str):
             code = hex_str[pos:pos + 2]
@@ -533,6 +556,40 @@ class SL651Decoder:
                 code = "ff" + sub
                 is_cust = True
 
+            entry = C.SL651_CUSTOM.get(code[2:]) if is_cust else C.SL651_ELEMENTS.get(code)
+            desc = entry[0] if entry else f"未知({code.upper()})"
+            unit = entry[1] if entry else ""
+            dt = entry[2] if entry else None
+
+            # F4/F5~FC 数组长度按规范固定（附录C 表C.1），不信任定义符长度
+            if dt in ("F4_ARRAY", "F5_ARRAY"):
+                fixed_len = 12 if dt == "F4_ARRAY" else 24
+                if f_len != fixed_len:
+                    warnings.append(
+                        f"要素 {code.upper()} 定义符声明 {f_len} 字节，"
+                        f"按规范固定 {fixed_len} 字节解析"
+                    )
+                available = len(hex_str) - pos
+                if available < fixed_len * 2:
+                    warnings.append(
+                        f"要素 {code.upper()} 数据不足规范 {fixed_len} 字节"
+                        f"（仅 {available // 2} 字节），按现有数据解析"
+                    )
+                need_chars = min(fixed_len * 2, available)
+                raw_hex = hex_str[pos:pos + need_chars]
+                pos += need_chars
+                if not raw_hex:
+                    break
+                elements.extend(self._make_element(
+                    code, desc, unit, dt, raw_hex, fixed_len, f_dec, False, is_cust
+                ))
+                if is_uniform and fixed_len > 0:
+                    self._consume_uniform_groups(
+                        hex_str, pos, fixed_len, dt, code, desc, unit, f_dec, elements
+                    )
+                    pos = len(hex_str)
+                continue
+
             need_chars = f_len * 2
             if pos + need_chars > len(hex_str):
                 break
@@ -541,45 +598,85 @@ class SL651Decoder:
             if not raw_hex:
                 break
 
-            entry = C.SL651_CUSTOM.get(code[2:]) if is_cust else C.SL651_ELEMENTS.get(code)
-            desc = entry[0] if entry else f"未知({code.upper()})"
-            unit = entry[1] if entry else ""
-            dt = entry[2] if entry else None
             # 0xFF 负数前缀仅适用 BCD 编码（规约 6.6.3.3），Hex 型数据的 0xFF 是合法字节
             is_neg = raw_hex[:2] == "ff" and f_len > 1 and dt != "Hex"
+            elements.extend(self._make_element(
+                code, desc, unit, dt, raw_hex, f_len, f_dec, is_neg, is_cust
+            ))
 
-            if dt == "STATUS":
-                elements.extend(self._parse_status(raw_hex, f_len))
-            elif dt == "F4_ARRAY":
-                elements.extend(self._parse_f4_array(raw_hex, f_len))
+            # 均匀报：标识符组只出现一次，其后为重复数据组（§6.6.4.4 表30 注d）
+            if is_uniform and f_len > 0:
+                remaining = len(hex_str) - pos
+                if remaining > 0 and remaining % (f_len * 2) == 0:
+                    nxt = hex_str[pos:pos + 2]
+                    if nxt not in C.SL651_ELEMENTS and nxt not in ("f0", "f1", "ff"):
+                        self._consume_uniform_groups(
+                            hex_str, pos, f_len, dt, code, desc, unit, f_dec, elements
+                        )
+                        pos = len(hex_str)
+
+        return elements, warnings
+
+    @staticmethod
+    def _consume_uniform_groups(
+        hex_str: str, pos: int, f_len: int, dt: str | None,
+        code: str, desc: str, unit: str, f_dec: int,
+        elements: list[ElementValue],
+    ) -> None:
+        """消费均匀报重复数据组（每组长度一致，无重复标识符）。"""
+        while pos + f_len * 2 <= len(hex_str):
+            raw = hex_str[pos:pos + f_len * 2]
+            pos += f_len * 2
+            if dt == "F4_ARRAY":
+                elements.extend(SL651Decoder._parse_f4_array(raw, f_len, f_dec))
             elif dt == "F5_ARRAY":
-                elements.extend(self._parse_f5_array(raw_hex, f_len, code))
+                elements.extend(SL651Decoder._parse_f5_array(raw, f_len, code, f_dec))
             elif dt == "Hex":
-                if code == "f3":
-                    # 图片二进制不做数值化，显示字节数 + hex 预览
-                    preview = raw_hex[:32].upper()
-                    if len(raw_hex) > 32:
-                        preview += "..."
-                    elements.append(ElementValue(
-                        code=code.upper(), name=desc,
-                        value=f"<图片数据 {f_len} 字节: {preview}>", unit="",
-                        raw=raw_hex.upper(), data_type="Hex", byte_len=f_len,
-                        decimal=f_dec, is_sub=is_cust,
-                    ))
-                else:
-                    pv = _safe_hex_val(raw_hex, f_dec, is_neg)
-                    elements.append(ElementValue(
-                        code=code.upper(), name=desc, value=pv[0], unit=unit,
-                        raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
-                    ))
-            else:
-                pv = _safe_bcd_val(raw_hex, f_dec, is_neg)
+                pv = _safe_hex_val(raw, f_dec, False)
                 elements.append(ElementValue(
-                    code=code.upper(), name=desc, value=pv[0], unit=unit,
-                    raw=pv[1], data_type="BCD", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
+                    code=code.upper(), name=desc, value=pv[0],
+                    unit=unit, raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec,
+                ))
+            else:
+                pv = _safe_bcd_val(raw, f_dec, False)
+                elements.append(ElementValue(
+                    code=code.upper(), name=desc, value=pv[0],
+                    unit=unit, raw=pv[1], data_type="BCD", byte_len=f_len, decimal=f_dec,
                 ))
 
-        return elements
+    @staticmethod
+    def _make_element(
+        code: str, desc: str, unit: str, dt: str | None, raw_hex: str,
+        f_len: int, f_dec: int, is_neg: bool, is_cust: bool,
+    ) -> list[ElementValue]:
+        if dt == "STATUS":
+            return SL651Decoder._parse_status(raw_hex, f_len)
+        if dt == "F4_ARRAY":
+            return SL651Decoder._parse_f4_array(raw_hex, f_len, f_dec)
+        if dt == "F5_ARRAY":
+            return SL651Decoder._parse_f5_array(raw_hex, f_len, code, f_dec)
+        if dt == "Hex":
+            if code == "f3":
+                # 图片二进制不做数值化，显示字节数 + hex 预览
+                preview = raw_hex[:32].upper()
+                if len(raw_hex) > 32:
+                    preview += "..."
+                return [ElementValue(
+                    code=code.upper(), name=desc,
+                    value=f"<图片数据 {f_len} 字节: {preview}>", unit="",
+                    raw=raw_hex.upper(), data_type="Hex", byte_len=f_len,
+                    decimal=f_dec, is_sub=is_cust,
+                )]
+            pv = _safe_hex_val(raw_hex, f_dec, is_neg)
+            return [ElementValue(
+                code=code.upper(), name=desc, value=pv[0], unit=unit,
+                raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
+            )]
+        pv = _safe_bcd_val(raw_hex, f_dec, is_neg)
+        return [ElementValue(
+            code=code.upper(), name=desc, value=pv[0], unit=unit,
+            raw=pv[1], data_type="BCD", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
+        )]
 
     def _parse_ascii_elements(self, data: bytes) -> list[ElementValue]:
         """解析 ASCⅡ 编码正文（空格分隔的 ASCII 标识符和值）。"""
@@ -599,7 +696,11 @@ class SL651Decoder:
         while i + 1 < len(tokens):
             code = tokens[i]
             value_str = tokens[i + 1]
-            entry = C.SL651_ASCII_ELEMENTS.get(code.upper())
+            ts_desc = _ascii_time_step_desc(code)
+            if ts_desc is not None:
+                entry = (ts_desc, "")
+            else:
+                entry = C.SL651_ASCII_ELEMENTS.get(code.upper())
 
             if code.upper() in ("F1F1", "F0F0", "ST", "TT"):
                 i += 1
@@ -611,7 +712,8 @@ class SL651Decoder:
             while j < len(tokens):
                 nxt = tokens[j]
                 nxt_entry = C.SL651_ASCII_ELEMENTS.get(nxt.upper())
-                if nxt_entry or nxt.upper() in ("F1F1", "F0F0", "ST", "TT"):
+                if (nxt_entry or _ascii_time_step_desc(nxt) is not None
+                        or nxt.upper() in ("F1F1", "F0F0", "ST", "TT")):
                     break
                 try:
                     float(nxt)
@@ -707,7 +809,11 @@ class SL651Decoder:
         return elements
 
     @staticmethod
-    def _parse_f4_array(raw_hex: str, f_len: int) -> list[ElementValue]:
+    def _parse_f4_array(raw_hex: str, f_len: int, decimals: int = 1) -> list[ElementValue]:
+        """F4H 5分钟时段雨量数组（规范固定 12 字节，分辨率 0.1mm）。
+
+        decimals 仅用于兜底；规范附录C 表C.1 固定 1 位小数。
+        """
         elements = []
         for i in range(min(f_len, 12)):
             if i * 2 + 2 > len(raw_hex):
@@ -727,7 +833,13 @@ class SL651Decoder:
         return elements
 
     @staticmethod
-    def _parse_f5_array(raw_hex: str, f_len: int, code: str) -> list[ElementValue]:
+    def _parse_f5_array(
+        raw_hex: str, f_len: int, code: str, decimals: int = 2
+    ) -> list[ElementValue]:
+        """F5H~FCH 5分钟间隔相对水位数组（规范固定 24 字节，分辨率 0.01m）。
+
+        规范附录C 表C.1 固定 12 组 × 2 字节 / 0.01m，故不采用定义符低 3 位小数。
+        """
         elements = []
         for i in range(0, min(f_len, 24), 2):
             if i * 2 + 4 > len(raw_hex):

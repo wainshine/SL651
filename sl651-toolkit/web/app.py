@@ -483,6 +483,9 @@ def frame_info(result: dict) -> dict:
             crc_pair = f"{result['crc_recv']} / {result['crc_calc']}"
         if crc_pair:
             info["CRC（接收/计算）"] = crc_pair
+    warns = result.get("warnings") or []
+    if warns:
+        info["告警"] = "；".join(str(w) for w in warns)
     return info
 
 

@@ -2,7 +2,7 @@
 
 ## 概述
 
-核心协议库。提供 SL651-2014 报文的编解码能力，支持 HEX/BCD 和 ASCII 两种编码，覆盖上行 7 种 + 下行 4 种功能码。
+核心协议库。提供 SL651-2014 报文的编解码能力，支持 HEX/BCD 和 ASCII 两种编码，编码器覆盖上行 4 种（2F/32/33/34）+ 下行 4 种（37/40/48/4A）功能码（另含 3AH 查询正文构造）。
 
 ## 文件清单
 
@@ -41,6 +41,7 @@ r = decoder.decode(frame_bytes)    # bytes
 | `station_type_name` | `str` | 测站类别 |
 | `encoding` | `str` | `"BCD"` / `"HEX"` / `"ASCII"` |
 | `crc_ok` | `bool` | CRC 校验结果 |
+| `warnings` | `list[str]` | 非致命解析告警（如 F4/F5 定义符与规范固定长度不符） |
 | `elements` | `list[ElementValue]` | 要素列表 |
 | `to_dict()` | `dict` | 转为字典 |
 
@@ -80,7 +81,7 @@ enc = SL651Encoder(
 | `build_set_param_frame(params)` | 0x40 | 下行参数设置（结束符 ENQ） |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行时钟校准（结束符 ENQ） |
 | `build_reset_frame()` | 0x48 | 下行恢复出厂（结束符 ENQ） |
-| `build_frame(func, body, direction, ascii_mode, end_marker)` | 任意 | 通用帧构造 |
+| `build_frame(function_code, body, direction, ascii_mode, end_marker, tx_time)` | 任意 | 通用帧构造 |
 
 **elements 格式**: `[(引导符, 值, 数据字节数, 小数位数), ...]`，如 `[(0x39, 12.345, 4, 3)]`
 

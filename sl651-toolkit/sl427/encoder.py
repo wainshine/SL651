@@ -212,17 +212,17 @@ class SL427Encoder:
         ctrl = C.make_ctrl(dir_=1, func_code=func_code)
         return self.build_frame(0x82, ctrl, bytes(payload), tp=tp_bytes)
 
-    def build_self_report_84(
-        self,
-        voltage: float,
-        tp: datetime | None = None,
-    ) -> bytes:
-        """自报电压帧 (AFN=84H, AUX=仅Tp)。
+    def build_self_report_84(self, voltage: float) -> bytes:
+        """自报电压帧 (AFN=84H)。
 
-        规范7.5.5/表B.98：数据域仅 2B BCD 电压值，不含 alarm/state。
+        规范7.5.5/表B.98：自报帧数据域仅 2B BCD 电压值（低位在前），
+        不含 alarm/state，也不含 Tp（Tp 仅出现在 B.99 确认帧）。
         """
         v = int(round(voltage * 100))
-        data = bytes(reversed(int_to_bcd_bytes(v, 2)))
+        try:
+            data = bytes(reversed(int_to_bcd_bytes(v, 2)))
+        except ValueError as e:
+            raise EncodeError(f"电压值超范围(0~999.99V): {voltage}") from e
         ctrl = C.make_ctrl(dir_=1, func_code=0x0D)
         return self.build_frame(0x84, ctrl, data)
 
@@ -233,10 +233,18 @@ class SL427Encoder:
         data: bytes,
         pw: int = 0,
         tp: datetime | None = None,
+        key1: int = 0,
     ) -> bytes:
-        """通用参数设置帧 (AFN=10H~4FH, AUX=PW+Tp, 下行)。"""
+        """通用参数设置帧 (AFN=10H~4FH, AUX=PW+Tp, 下行)。
+
+        key1/pw 组成密码 PW（表9）：key1 1位 BCD，pw 3位 BCD。
+        """
+        if not 0 <= key1 <= 9:
+            raise EncodeError(f"PW key1 超范围(0~9): {key1}")
+        if not 0 <= pw <= 999:
+            raise EncodeError(f"PW key2 超范围(0~999): {pw}")
         ctrl = C.make_ctrl(dir_=0, func_code=func_code)
-        pw_bytes = C.encode_pw(0, pw)
+        pw_bytes = C.encode_pw(key1, pw)
         return self.build_frame(afn, ctrl, data, tp=encode_tp(tp), pw=pw_bytes)
 
     # ------------------------------------------------------------------
@@ -269,7 +277,10 @@ class SL427Encoder:
     def build_set_recharge(self, amount: float, pw: int = 0) -> bytes:
         """设置充值量 (AFN=15H)。amount 单位 m³（4B BCD 小端，规约 §7.2.5 表13）。"""
         v = int(round(amount))
-        data = bytes(reversed(int_to_bcd_bytes(v, 4)))
+        try:
+            data = bytes(reversed(int_to_bcd_bytes(v, 4)))
+        except ValueError as e:
+            raise EncodeError(f"充值量超范围(0~99999999 m³): {amount}") from e
         return self.build_param_set_frame(0x15, 0x00, data, pw)
 
     def build_set_ic_card_on(self, pw: int = 0) -> bytes:

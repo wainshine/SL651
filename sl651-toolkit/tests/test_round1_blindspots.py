@@ -105,7 +105,7 @@ def test_sl427_84_roundtrip():
     """SL427 AFN=0x84 自报电压 往返"""
     addr = encode_address(method=1, admin_code=110108, stn_id=1284)
     enc = SL427Encoder(addr)
-    f = enc.build_self_report_84(voltage=12.3, tp=datetime(2026, 6, 1, 12, 0))
+    f = enc.build_self_report_84(voltage=12.3)
     r = SL427Decoder().decode(f)
     assert r.crc_ok, f"AFN=0x84 CRC应通过"
     assert r.afn == 0x84, f"AFN应为0x84, 实际{hex(r.afn)}"
@@ -129,7 +129,7 @@ def test_sl427_84_voltage_values():
     addr = encode_address(method=1, admin_code=110108, stn_id=1284)
     enc = SL427Encoder(addr)
     for v in [0.0, 12.34, 99.99, 12.6]:
-        f = enc.build_self_report_84(voltage=v, tp=datetime(2026, 6, 1, 12, 0))
+        f = enc.build_self_report_84(voltage=v)
         r = SL427Decoder().decode(f)
         assert r.crc_ok
         volt_elems = [e for e in r.elements if e.name == "电压"]

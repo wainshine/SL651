@@ -1,7 +1,7 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.2.6  
-> 最后更新：2026-09-03  
+> 版本：v1.2.7  
+> 最后更新：2026-09-14  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
 ---
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 44 项 + test_round1_blindspots.py, 10 项）
+├── tests/          测试脚本（test_sl651.py, 53 项 + test_round1_blindspots.py, 10 项）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -52,7 +52,7 @@ sl651-toolkit/
 ```
 起始符(2B) | Header(11B) | STX/SYN(1B) | Body(NB) | 结束符(1B) | CRC16(2B)
 ```
-**ASCⅡ 编码帧**：起始符为 `01 01`(SOH) 而非 `7E 7E`。
+**ASCⅡ 编码帧**：起始符为单 `01`(SOH) 而非 `7E 7E`；兼容旧双 `01 01` 方言。
 
 **报头（上行，表11）**
 
@@ -87,7 +87,7 @@ sl651-toolkit/
 |--------|----------|------|--------|------|------|------|
 | `2F` | 链路维持报 | 上行 | ETX | ✅ | ✅ `build_link_maintain_frame` | 仅流水号+发报时间 |
 | `30` | 测试报 | 上行 | ETX | ✅ | — | 设备检修测试 |
-| `31` | 均匀报 | 上行 | ETX | ✅ | — | 等间隔 F4(雨量)/F5(水位) 数组 |
+| `31` | 均匀报 | 上行 | ETX | ✅ | — | 等间隔：标识符组仅一次 + 多组重复数据（§6.6.4.4 表30） |
 | `32` | 定时报 | 上行 | ETX | ✅ | ✅ `build_timing_frame` | 定时上报水文要素 |
 | `33` | 加报报 | 上行 | ETX | ✅ | ✅ `build_alarm_frame` | 阈值触发或变化报警 |
 | `34` | 小时报 | 上行 | ETX | ✅ | ✅ `build_hourly_frame` | 每小时 12 组 5min 间隔水位 |
@@ -116,7 +116,11 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 **负数 BCD 编码（规约 6.6.3.3a）**：首字节 `0xFF` 表示负数。
 
-**状态位解码（规约表58）**：`45H` 要素为 12-bit 压缩位掩码（交流电/蓄电池/水位/流量/水质/仪表/箱门/存储器/IC卡/水泵/剩余水量）。
+**状态位解码（规约表58）**：`45H` 要素为 12-bit 压缩位掩码（交流电充电/蓄电池电压/水位超限/流量超限/水质超限/流量仪表/水位仪表/终端箱门/存储器/IC卡功能/水泵工作/剩余水量，共 12 位）。
+
+**F4/F5 数组（规约附录C 表C.1）**：`F4H` 固定 12 字节（12×5min 时段雨量，0.1mm）；`F5H~FCH` 固定 24 字节（12×5min 间隔相对水位，0.01m）。数组长度按规范固定，不采信定义符长度；定义符与规范不符时写入 `DecodedMessage.warnings` 并继续按规范解析。
+
+> 注：福建样本 0x34 帧 F5 定义符为 `0x5C`（声明 11 字节/4 小数），与规范固定 24 字节冲突，疑为厂商非标实现或样本笔误。本工具按规范固定 24B/0.01m 解析并告警；该样本的具体数值语义待与厂商确认。
 
 ### 2.4 校验算法
 
@@ -132,7 +136,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 - 报文为空 / 非HEX字符 / 奇数长度 / 非7E7E或0101开头 / 正文长度不匹配 → `DecodeError`
 - 无效 BCD 数据 → 优雅降级，值显示为 `-`
 
-**输出**: `DecodedMessage` 数据类，含报头信息、要素列表、CRC 信息、逐字节视图。
+**输出**: `DecodedMessage` 数据类，含报头信息、要素列表、CRC 信息、逐字节视图、非致命告警 `warnings`（如 F4/F5 定义符与规范不符）。
 
 ### 2.6 编码器设计
 
@@ -150,11 +154,11 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_set_param_frame(params)` | 0x40 | 下行 | ENQ | ✅ 参数设置 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | ✅ 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | ✅ 恢复出厂 |
-| `build_frame(func, body, dir, ascii, end_marker)` | 任意 | 任意 | 可指定 | ✅ 通用帧构造 |
+| `build_frame(function_code, body, direction, ascii_mode, end_marker, tx_time)` | 任意 | 任意 | 可指定 | ✅ 通用帧构造（正文 >4095 抛 `EncodeError`） |
 
 **输入格式**: `elements = [(引导符, 值, 数据字节数, 小数位数), ...]`  
 **负数编码**: 首字节 `0xFF` + BCD(abs(value))  
-**参数校验**: `station_addr` 必须 10 位 hex → 抛 `EncodeError`；BCD 超限 → 抛 `ValueError`
+**参数校验**: `station_addr` 必须 10 位 hex → 抛 `EncodeError`；BCD 值超限、正文 >4095 字节 → 统一抛 `EncodeError`
 
 ---
 
@@ -182,7 +186,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `81` | 自报告警 | 上行 | ✅ | ✅ `build_self_report_81` | 结构同 C0 |
 | `82` | 人工置数 | 上行 | ✅ | ✅ `build_self_report_82` | — |
 | `83` | 自报图片 | 上行 | ✅ | — | — |
-| `84` | 自报电压 | 上行 | ✅ | ✅ `build_self_report_84` | 2B BCD 电压 |
+| `84` | 自报电压 | 上行 | ✅ | ✅ `build_self_report_84` | 2B BCD 电压（表B.98，无 Tp） |
 | `61` | 查询实时图像 | 上行 | ✅ | — | — |
 | `10~4F` | 参数设置(通用) | 下行 | — | ✅ `build_param_set_frame` | 通用模板 |
 | `FFxx` | 用户自定义 | 任意 | ✅ | — | 双字节 AFN 扩展 |
@@ -217,14 +221,14 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_self_report_c0(func, data, tp, alarm, state)` | ✅ | 自报实时数据帧 (AFN=C0) |
 | `build_self_report_81(func, data, tp, alarm, state)` | ✅ | 自报告警 (AFN=81) |
 | `build_self_report_82(func, data, tp, alarm, state)` | ✅ | 人工置数 (AFN=82) |
-| `build_self_report_84(voltage, tp)` | ✅ | 自报电压 (AFN=84) |
+| `build_self_report_84(voltage)` | ✅ | 自报电压 (AFN=84，表B.98 无 Tp) |
 | `build_query_response(func, data)` | ✅ | 查询响应帧 (AFN=B0) |
 | `build_set_addr(bytes, pw)` | ✅ | 设置地址 (AFN=10) |
 | `build_set_clock(dt, pw)` | ✅ | 设置时钟 (AFN=11)，星期月复合字节 |
 | `build_set_work_mode(mode, pw)` | ✅ | 设置工作模式 (AFN=12) |
 | `build_set_recharge(amount, pw)` | ✅ | 设置充值量 (AFN=15) |
 | `build_set_ic_card_on/off(pw)` | ✅ | IC卡功能 (AFN=30/31) |
-| `build_param_set_frame(afn, func, data, pw, tp)` | ✅ | 通用参数设置帧模板 |
+| `build_param_set_frame(afn, func, data, pw, tp, key1)` | ✅ | 通用参数设置帧模板（PW 校验统一抛 EncodeError） |
 
 **辅助函数**: `make_ctrl()`, `encode_address()`, `encode_tp()`
 
@@ -306,8 +310,8 @@ python web/app.py
 | `test_sl427_invalid_l` | SL427 | 畸形 L 拒绝 |
 | `test_sl427_downlink` | SL427 | 下行帧解码 |
 | `test_sl427_param_settings` | SL427 | 设置地址/时钟/充值/IC卡 往返 |
-| `test_fujian_messages` | SL651 | **23 条福建规定真实报文 CRC 验证** |
-| `test_beijing_messages` | SL651 | **25 条北京水务平台真实报文 CRC 验证**（8测站/3类报文） |
+| `test_fujian_messages` | SL651 | **23 条福建规定真实报文 CRC + 要素级基线** |
+| `test_beijing_messages` | SL651 | **25 条北京水务平台真实报文 CRC + 要素级基线**（8测站/3类报文） |
 | `test_simulator_engine_smoke` | 模拟器 | 引擎冒烟测试 |
 | `test_hourly_frame_validation` | SL651 | 小时报 12 组校验 |
 | `test_recharge_le_bcd` | SL427 | 充值量小端 BCD |
@@ -330,8 +334,17 @@ python web/app.py
 | `test_sl427_invalid_nibble_time` | SL427 | 非法 BCD 半字节时间占位显示（v1.2.6 B1） |
 | `test_sl651_f3_image_display` | SL651 | F3 图片要素字节摘要显示，不数值化（v1.2.6 B2） |
 | `test_sl651_ascii_reserved_id` | SL651 | ASCII 编码器拒绝保留引导符 ST/TT（v1.2.6 B3） |
+| `test_sl651_uniform_report` | SL651 | 0x31 均匀报标识符组一次 + 12 组数据（v1.2.7 C-1） |
+| `test_sl651_f5_fixed_length` | SL651 | F5 定义符失配按固定 24B 解析 + 告警（v1.2.7 M-1） |
+| `test_sl427_84_tp` | SL427 | AFN=84 电压帧写入并解析 Tp（v1.2.7 M-2） |
+| `test_sl651_bcd_overflow_contract` | SL651 | BCD 超限抛 EncodeError（v1.2.7 M-3） |
+| `test_sl427_bcd_overflow_contract` | SL427 | 电压/充值/密码超限抛 EncodeError（v1.2.7 M-3） |
+| `test_sl651_body_len_limit` | SL651 | 正文 >4095 抛 EncodeError（v1.2.7 M-5） |
+| `test_sl427_short_data_degrade` | SL427 | C0 短数据域降级解析（v1.2.7 L-3） |
+| `test_sl427_addr_method` | SL427 | 地址方式1/方式2 判定（v1.2.7 L-4） |
+| `test_sl651_ascii_uniform` | SL651 | 0x31 ASCII 均匀报：时间步长码 DRxnn + 单标识符多值数组（v1.2.7） |
 
-**总计: 44 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
+**总计: 53 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
 
 ### 7.2 福建规定报文测试 ⭐
 
