@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.2.7
+# SL651 水文规约工具包 v1.2.8
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -168,6 +168,16 @@ for e in r.elements:
 | `build_set_clock(dt)` | 0x11 | 下行 | 设置时钟 |
 | `build_set_work_mode(mode)` | 0x12 | 下行 | 设置工作模式 |
 | `build_set_recharge(amount)` | 0x15 | 下行 | 设置充值量 |
+| `build_set_recharge_alarm(m3)` | 0x16 | 下行 | 剩余水量报警值 |
+| `build_set_level_limits(points)` | 0x17 | 下行 | 水位基值/上下限 |
+| `build_set_pressure_limits(points)` | 0x18 | 下行 | 水压上/下限 |
+| `build_set_water_quality(afn, params)` | 0x19/0x1A | 下行 | 水质参数上/下限 |
+| `build_set_water_amount(values)` | 0x1B | 下行 | 水量初始值 |
+| `build_set_relay_code_len(seconds)` | 0x1C | 下行 | 中继引导码长值 |
+| `build_set_relay_addr(addrs)` | 0x1D | 下行 | 中继转发地址 |
+| `build_set_relay_auto_switch(value)` | 0x1E | 下行 | 中继自动切换/自报 |
+| `build_set_flow_limits(points)` | 0x1F | 下行 | 流量参数上限值 |
+| `build_set_report_threshold(...)` | 0x20 | 下行 | 启报阈值/固态间隔 |
 | `build_set_ic_card_on()` | 0x30 | 下行 | IC卡有效 |
 | `build_set_ic_card_off()` | 0x31 | 下行 | 取消IC卡 |
 
@@ -215,10 +225,16 @@ python web/app.py
 ## 四、运行测试
 
 ```bash
-python tests/test_sl651.py
+# 一键运行全部套件（推荐）
+python tests/run_all.py
 
-# 53 项测试全部通过（另含 10 项盲区测试；23 条福建 + 25 条北京真实报文 CRC + 要素级验证）
+# 或单独运行
+python tests/test_sl651.py            # 53 项主测试
+python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
+
+- 主套件 53 项 + 盲区 10 项全部通过；23 条福建 + 25 条北京真实报文 CRC + 要素级验证
+- CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
 
@@ -234,6 +250,13 @@ python tests/test_sl651.py
   - L: 加报边沿测试驱动真实 `_run`；无效 BCD 降级断言强化；SL427 短数据域降级；地址方式判定文档化；死常量标注；PW key1/溢出校验
   - 收尾: SL427 `DecodedMessage` 增加 `warnings` 通道（短数据域降级可见）；0x31 ASCII 均匀报识别时间步长码 `DRxnn` 并支持单标识符多值数组
   - 文档一致性 D-1~D-11 修正；测试 44 → 53 项
+
+- **v1.2.8**：工程化 + 测试深度 + SL427 参数 AFN 扩展
+  - 工程化: 统一测试入口 `tests/run_all.py` + GitHub Actions CI（Python 3.10/3.11/3.12）
+  - 测试: 新增模拟器端到端集成（含 TcpSender 真实 TCP 收发）与解码器变异测试（SL651/SL427 各 600 次）
+  - 功能: SL427 参数设置 AFN 16H~20H 共 11 个便捷方法（数据域按规约表14~21 布局）
+  - 规约核查: 关闭「SL427 ASCII 编码帧」（规约不存在）与「45H 32 位」（表58 仅定义 12 位）两个伪需求
+  - 测试: 主套件 53 项 + 4 个辅助套件（`run_all.py` 5/5）
 
 - **v1.2.6**：主会话 4 代自审计修复版（文档一致性修正 + 3 项缺陷修复）
   - 文档：根 README/toolkit README/handoff_test 测试计数滞后修正（24/25 → 44 项）、handoff_main 行号漂移 2 处、sl651 README 参数名 `func` → `function_code`

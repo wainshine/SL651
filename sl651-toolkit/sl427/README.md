@@ -67,6 +67,16 @@ enc = SL427Encoder(addr)
 | `build_set_clock(dt, pw)` | 0x11 | 设置时钟（含星期月复合字节） |
 | `build_set_work_mode(mode, pw)` | 0x12 | 设置工作模式 |
 | `build_set_recharge(amount, pw)` | 0x15 | 设置充值量 |
+| `build_set_recharge_alarm(amount_m3, pw)` | 0x16 | 剩余水量报警值（3B BCD） |
+| `build_set_level_limits(points, pw)` | 0x17 | 水位基值/上下限（每点 7B） |
+| `build_set_pressure_limits(points, pw)` | 0x18 | 水压上/下限（每点 8B） |
+| `build_set_water_quality(afn, params, pw)` | 0x19/0x1A | 水质参数种类及上/下限 |
+| `build_set_water_amount(values, pw)` | 0x1B | 水量初始值（每表 5B） |
+| `build_set_relay_code_len(seconds, pw)` | 0x1C | 中继引导码长值（1B BIN） |
+| `build_set_relay_addr(addr_list, pw)` | 0x1D | 中继转发监测站地址（N×5B） |
+| `build_set_relay_auto_switch(value, pw)` | 0x1E | 中继自动切换/自报（1B BIN） |
+| `build_set_flow_limits(points, pw)` | 0x1F | 流量参数上限值（每点 5B） |
+| `build_set_report_threshold(category, index, interval_min, threshold, pw)` | 0x20 | 启报阈值及固态存储间隔 |
 | `build_set_ic_card_on(pw)` | 0x30 | IC卡功能有效 |
 | `build_set_ic_card_off(pw)` | 0x31 | 取消IC卡功能 |
 | `build_param_set_frame(afn, func_code, data, pw, tp, key1)` | 10~4F | 通用参数设置模板 |

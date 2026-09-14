@@ -2,7 +2,7 @@
 
 > 角色：业务测试1代  
 > 接棒时间：2026-07-01  
-> 基线版本：v1.2.7  
+> 基线版本：v1.2.8  
 > 接手前必读：`docs/project.md` + `README.md` + `docs/handoff_main.md` + 本文档
 
 ---
@@ -39,7 +39,7 @@ python3 tests/test_sl651.py
 | M-2 | Medium | `sl427/encoder.py:238` | 充值量 BCD 大端→应为小端 LE | ✅ 已修复（`bytes(reversed(...))`） |
 | L-1 | Low | `tests/test_sl651.py:353` | `test_invalid_bcd_graceful` 无 assert | ✅ 已修复（加入 assert） |
 | L-2 | Low | `simulator/engine.py:110` | `add_station` 形参 `station_type` 死参数 | ✅ 已修复 |
-| L-3 | Low | `docs/project.md` §7.1 | 测试计数已同步为 **52 项**（v1.2.7） | ✅ 已同步 |
+| L-3 | Low | `docs/project.md` §7.1 | 测试计数已同步为 **53 项**（v1.2.7） | ✅ 已同步 |
 
 ---
 
@@ -212,7 +212,7 @@ python3 web/app.py   # 浏览器 http://localhost:5050
 | P2-远期 | `sl427/constants.py:106` | COMP_BITS[3]=0x07 表示气象（含气压），非风速；v1.9 M-7 已修正 | 不影响解析 |
 | P2-远期 | Roadmap | 多包 (SYN/ETB) 拼接重组 | 当前可解码单帧多包 |
 | P2-远期 | Roadmap | SL427 参数设置全量 AFN (~30个变长格式) | 当前通用模板+6便捷方法 |
-| L-3 | `docs/project.md` §7.1 | 测试计数已同步为 52 项（v1.2.7） | 已解决 |
+| L-3 | `docs/project.md` §7.1 | 测试计数已同步为 53 项（v1.2.7） | 已解决 |
 
 ---
 

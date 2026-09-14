@@ -1,3 +1,10 @@
 .DS_Store
 行业规范/
 *.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/

@@ -232,5 +232,5 @@ if __name__ == "__main__":
         print(f"❌ 失败 {len(FAILURES)} 项:")
         for f in FAILURES:
             print(f"  - {f}")
-    else:
-        print("✅ 所有盲区测试通过")
+        sys.exit(1)
+    print("✅ 所有盲区测试通过")

@@ -1,7 +1,7 @@
 # SL651-Toolkit 交接文档
 
 > 最后更新：2026-09-14  
-> 版本：v1.2.7  
+> 版本：v1.2.8  
 > 接手前必读：`docs/project.md` + 项目 `README.md` + 本文档
 
 ---
@@ -21,20 +21,28 @@
 ### 1.1 测试状态
 
 ```
-53 项测试全部通过（另有盲区测试 10 项）
+python tests/run_all.py  → 5/5 套件通过
+  主套件 53 项 / 盲区 10 项 / 模拟器集成 4 组 / 解码器变异 2 组 / SL427 参数 AFN 11 组
 福建 23 条真实报文 CRC + 要素级基线全通过
 北京 25 条真实报文 CRC + 要素级基线全通过
 ```
 
 ### 1.2 版本号
 
-`sl651/__init__.py:__version__ = "1.2.7"`
+`sl651/__init__.py:__version__ = "1.2.8"`
 
 ### 1.3 完成的审计轮次
 
-v1.1~v2.2，共 12 轮。v1.2.4 修复 v1.10/v2.0 综合参数/小时报F4/统计雨量等；v1.2.5 修复 v2.1 异常契约/线程安全/编码器校验；v1.2.6 修复 3 项自审计缺陷；v1.2.7 修复 v2.2 的 1C+5M+7L 全部缺陷。
+v1.1~v2.2，共 12 轮。v1.2.4 修复 v1.10/v2.0 综合参数/小时报F4/统计雨量等；v1.2.5 修复 v2.1 异常契约/线程安全/编码器校验；v1.2.6 修复 3 项自审计缺陷；v1.2.7 修复 v2.2 的 1C+5M+7L 全部缺陷；v1.2.8 工程化 + 测试深度 + SL427 参数 AFN。
 
-### 1.4 v1.2.7 审计 v2.2 修复（主会话 5 代，2026-09-14）
+### 1.4 v1.2.8 工程化与功能扩展（主会话 5 代，2026-09-14）
+
+- 工程化: `tests/run_all.py` 统一入口 + `.github/workflows/ci.yml`
+- 测试: 模拟器端到端集成（真实 TCP）、解码器变异测试（各 600 次）
+- 功能: SL427 参数 AFN 16H~20H 共 11 个便捷方法
+- 规约核查: 关闭 SL427 ASCII 帧 / 45H 32 位两个伪需求
+
+### 1.5 v1.2.7 审计 v2.2 修复（主会话 5 代，2026-09-14）
 
 - C-1: 0x31 均匀报「标识符组一次 + 多组重复数据」解析（原静默丢失 11/12 组）
 - M-1: F4/F5 固定 12B/24B，定义符失配写 `warnings` 并继续，消除截断 + 垃圾要素
@@ -44,7 +52,7 @@ v1.1~v2.2，共 12 轮。v1.2.4 修复 v1.10/v2.0 综合参数/小时报F4/统�
 - L-1~L-6 及文档 D-1~D-11 全部处理；测试 44 → 53 项
 - 收尾：SL427 `DecodedMessage.warnings`（短数据域降级可见）；0x31 ASCII 均匀报时间步长码 `DRxnn` 识别 + 多值数组
 
-### 1.5 v1.2.6 自审计修复（主会话 4 代，2026-09-03）
+### 1.6 v1.2.6 自审计修复（主会话 4 代，2026-09-03）
 
 - 文档一致性修正 8 处（测试计数滞后、行号漂移、参数名不符）
 - B1: SL427 `_fmt_time_427` 非法 BCD 半字节静默归零 → 统一"无效时间"占位
@@ -114,6 +122,16 @@ v1.1~v2.2，共 12 轮。v1.2.4 修复 v1.10/v2.0 综合参数/小时报F4/统�
 | `build_set_clock` | 0x11 | 下行 |
 | `build_set_work_mode` | 0x12 | 下行 |
 | `build_set_recharge` | 0x15 | 下行 |
+| `build_set_recharge_alarm` | 0x16 | 下行 |
+| `build_set_level_limits` | 0x17 | 下行 |
+| `build_set_pressure_limits` | 0x18 | 下行 |
+| `build_set_water_quality` | 0x19/0x1A | 下行 |
+| `build_set_water_amount` | 0x1B | 下行 |
+| `build_set_relay_code_len` | 0x1C | 下行 |
+| `build_set_relay_addr` | 0x1D | 下行 |
+| `build_set_relay_auto_switch` | 0x1E | 下行 |
+| `build_set_flow_limits` | 0x1F | 下行 |
+| `build_set_report_threshold` | 0x20 | 下行 |
 | `build_set_ic_card_on/off` | 0x30/0x31 | 下行 |
 | `build_param_set_frame` | 10~4F | 下行 |
 
@@ -144,19 +162,21 @@ v1.1~v2.2，共 12 轮。v1.2.4 修复 v1.10/v2.0 综合参数/小时报F4/统�
 
 ### 3.1 立即 (P1)
 
-| 任务 | 位置 | 说明 |
+| 任务 | 位置 | 状态 |
 |------|------|------|
-| 模拟器引擎集成测试 | `tests/` | 当前仅有冒烟测试 (`test_simulator_engine_smoke`)，缺少端到端 MQTT broker 联调 |
-| round1 盲区测试纳入 CI | `tests/test_round1_blindspots.py` | 10 项盲区测试已全部修复通过，建议纳入例行运行 |
+| 统一测试入口 `tests/run_all.py` | `tests/run_all.py` | ✅ v1.2.8 已提供 |
+| round1 盲区测试纳入 CI | `.github/workflows/ci.yml` | ✅ v1.2.8 已纳入（Python 3.10/3.11/3.12） |
+| 模拟器引擎集成测试 | `tests/test_simulator_integration.py` | ✅ v1.2.8 已补（FakeSender/真实 TCP 全链路） |
 
 ### 3.2 远期 (P2)
 
 | 任务 | 说明 |
 |------|------|
-| SL427 参数设置全量 AFN (~30个变长格式) | 当前仅有通用模板 + 6 个便捷方法 |
-| SL427 ASCII 编码帧 | SL427 文本帧解码 |
-| 多包 (SYN/ETB) 拼接重组 | 当前已处理 SYN 单帧偏移，不支持跨帧拼接 |
-| 45H 状态位 32 位全量 | 当前缩减为 12 位 |
+| SL427 参数设置全量 AFN | ✅ 已补 16H~20H（v1.2.8）；剩余查询类 50H~65H、复位 90H~96H、配置 A0H~A2H |
+| SL427 查询类帧解码 | 当前下行参数/查询帧仅显示「下行报文」，未解析数据域 |
+| 多包 (SYN/ETB) 拼接重组 | 当前已处理 SYN 单帧偏移，不支持跨帧拼接（规约表18：6 位包总数/序列号） |
+| ~~45H 状态位 32 位全量~~ | 不存在：规约表58 仅定义 BIT0~11，BIT12~31 保留；当前 12 位与规约一致 |
+| ~~SL427 ASCII 编码帧~~ | 不存在：SL427 全文无 ASCII 编码，帧固定 68H…16H |
 | 0x26 累计雨量独立计数器 | 模拟器雨量站当前用日累计近似 |
 
 ### 3.3 设计保留项（不修）
@@ -235,7 +255,12 @@ frame = enc.build_set_clock(datetime.now())  # 下行校时
 
 | 文件 | 内容 |
 |------|------|
+| `tests/run_all.py` | 统一入口：依次运行下列全部套件 |
 | `tests/test_sl651.py` | 53 项测试：BCD/CRC/定义符/编解码往返/福建23条+北京25条（CRC + 要素级基线）/0x31均匀报/F5固定长度/模拟器冒烟/编码器校验/Web API 等 |
+| `tests/test_round1_blindspots.py` | 10 项盲区测试 |
+| `tests/test_simulator_integration.py` | 4 组端到端集成（含 TcpSender 真实 TCP 收发） |
+| `tests/test_fuzz_decoders.py` | 解码器变异测试（SL651/SL427 各 600 次） |
+| `tests/test_sl427_param_afn.py` | SL427 参数 AFN 16H~20H 数据域布局测试 |
 | `examples/sample_messages.txt` | njnrs + 水测家示例 |
 | `examples/fujian_messages.txt` | 福建规定 23 条 (14种功能码) |
 | `examples/beijing_messages.txt` | 北京水务平台 25 条 (8测站, 3类报文) |

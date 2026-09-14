@@ -22,6 +22,14 @@ def _bcd_byte(val: int) -> int:
     return ((val // 10) << 4) | (val % 10)
 
 
+def _bcd_le(value: int, nbytes: int) -> bytes:
+    """整数 -> 小端 2 位一组 BCD（SL427 数据域常用，低位字节在前）。"""
+    try:
+        return bytes(reversed(int_to_bcd_bytes(value, nbytes)))
+    except ValueError as e:
+        raise EncodeError(f"BCD 值超范围: {value} ({nbytes} 字节): {e}") from e
+
+
 def encode_address(method: int = 1, admin_code: int = 0, stn_id: int = 1, hex_code: str = "") -> bytes:
     """编码地址域 A（5字节）。
 
@@ -290,3 +298,160 @@ class SL427Encoder:
     def build_set_ic_card_off(self, pw: int = 0) -> bytes:
         """取消IC卡功能 (AFN=31H)。"""
         return self.build_param_set_frame(0x31, 0x00, b"", pw)
+
+    # ------------------------------------------------------------------
+    # 参数设置便捷方法 (AFN=16H~20H，规约 7.2.6~7.2.16)
+    # ------------------------------------------------------------------
+
+    def build_set_recharge_alarm(self, amount_m3: float, pw: int = 0) -> bytes:
+        """设置剩余水量报警值 (AFN=16H)。3B 压缩 BCD，0~999999 m³（表14）。"""
+        v = int(round(amount_m3))
+        if not 0 <= v <= 999999:
+            raise EncodeError(f"剩余水量报警值超范围(0~999999 m³): {amount_m3}")
+        return self.build_param_set_frame(0x16, 0x00, _bcd_le(v, 3), pw)
+
+    def build_set_level_limits(
+        self, points: list[tuple[float, float, float]], pw: int = 0
+    ) -> bytes:
+        """设置水位基值/上下限 (AFN=17H)，每点 7B（表15/16）。
+
+        points: [(base, lower_offset, upper_offset), ...]
+          base: -7999.99~7999.99 m（第3字节 D7 为符号位）
+          lower/upper_offset: 0~99.99 m（相对基值的偏移）
+        """
+        data = bytearray()
+        for base, lower, upper in points:
+            base_v = int(round(abs(base) * 100))
+            if base_v > 799999:
+                raise EncodeError(f"水位基值超范围(-7999.99~7999.99): {base}")
+            b = bytearray(_bcd_le(base_v, 3))
+            if base < 0:
+                b[2] |= 0x80
+            data.extend(b)
+            for off in (lower, upper):
+                ov = int(round(off * 100))
+                if not 0 <= ov <= 9999:
+                    raise EncodeError(f"水位上下限偏移超范围(0~99.99): {off}")
+                data.extend(_bcd_le(ov, 2))
+        return self.build_param_set_frame(0x17, 0x00, bytes(data), pw)
+
+    def build_set_pressure_limits(
+        self, points: list[tuple[float, float]], pw: int = 0
+    ) -> bytes:
+        """设置水压上/下限 (AFN=18H)，每点 8B（上限4B + 下限4B，小端 BCD，表17）。
+
+        points: [(upper_kpa, lower_kpa), ...]，范围 0~999999.99 kPa
+        """
+        data = bytearray()
+        for upper, lower in points:
+            for val in (upper, lower):
+                v = int(round(val * 100))
+                if not 0 <= v <= 99999999:
+                    raise EncodeError(f"水压值超范围(0~999999.99 kPa): {val}")
+                data.extend(_bcd_le(v, 4))
+        return self.build_param_set_frame(0x18, 0x00, bytes(data), pw)
+
+    def build_set_water_quality(
+        self, afn: int, params: list[tuple[int, int]], pw: int = 0
+    ) -> bytes:
+        """设置水质参数种类及上/下限值 (AFN=19H/1AH)，5B 位图 + N×4B（表18）。
+
+        params: [(bit_index, scaled_value), ...]
+          bit_index: 0~39（表18 对应位）
+          scaled_value: 已按该参数小数位缩放后的整数（0~99999999）
+        """
+        if afn not in (0x19, 0x1A):
+            raise EncodeError(f"AFN 仅支持 19H/1AH: {afn:#x}")
+        mask = 0
+        for bit, _ in params:
+            if not 0 <= bit <= 39:
+                raise EncodeError(f"水质参数位号超范围(0~39): {bit}")
+            mask |= 1 << bit
+        data = bytearray(mask.to_bytes(5, "little"))
+        for _, val in params:
+            v = int(round(val))
+            if not 0 <= v <= 99999999:
+                raise EncodeError(f"水质参数值超范围(0~99999999): {val}")
+            data.extend(_bcd_le(v, 4))
+        return self.build_param_set_frame(afn, 0x00, bytes(data), pw)
+
+    def build_set_water_amount(
+        self, values: list[float], pw: int = 0
+    ) -> bytes:
+        """设置水量初始值 (AFN=1BH)，每个水表 5B BCD（表19），0~7999999999 m³。"""
+        data = bytearray()
+        for val in values:
+            v = int(round(val))
+            if not 0 <= v <= 7999999999:
+                raise EncodeError(f"水量初始值超范围(0~7999999999): {val}")
+            data.extend(_bcd_le(v, 5))
+        return self.build_param_set_frame(0x1B, 0x00, bytes(data), pw)
+
+    def build_set_relay_code_len(self, seconds: int, pw: int = 0) -> bytes:
+        """设置转发中继引导码长值 (AFN=1CH)，1B BIN，0~255 s（§7.2.12）。"""
+        if not 0 <= seconds <= 255:
+            raise EncodeError(f"中继引导码长值超范围(0~255 s): {seconds}")
+        return self.build_param_set_frame(0x1C, 0x00, bytes([seconds]), pw)
+
+    def build_set_relay_addr(self, addr_list: list[bytes], pw: int = 0) -> bytes:
+        """设置中继站转发监测站地址 (AFN=1DH)，N×5B（格式同地址域，§7.2.13）。"""
+        data = bytearray()
+        for a in addr_list:
+            if len(a) != 5:
+                raise EncodeError(f"转发地址必须为 5 字节，当前 {len(a)} 字节")
+            data.extend(a)
+        return self.build_param_set_frame(0x1D, 0x00, bytes(data), pw)
+
+    def build_set_relay_auto_switch(self, value: int, pw: int = 0) -> bytes:
+        """设置中继站工作机自动切换/自报状态 (AFN=1EH)，1B BIN（§7.2.14）。"""
+        if not 0 <= value <= 0xFF:
+            raise EncodeError(f"中继自动切换状态字节超范围(0~0xFF): {value}")
+        return self.build_param_set_frame(0x1E, 0x00, bytes([value]), pw)
+
+    def build_set_flow_limits(
+        self, points: list[tuple[float, bool]], pw: int = 0
+    ) -> bytes:
+        """设置流量参数上限值 (AFN=1FH)，每点 5B BCD（表20）。
+
+        points: [(value, unit_hour), ...]
+          value: -999999.999~999999.999（m³/s 或 m³/h）
+          unit_hour: True=m³/h, False=m³/s
+        """
+        data = bytearray()
+        for value, unit_hour in points:
+            if not -999999.999 <= value <= 999999.999:
+                raise EncodeError(f"流量上限值超范围(±999999.999): {value}")
+            v = int(round(abs(value) * 1000))
+            if v > 999999999:
+                raise EncodeError(f"流量上限值超范围: {value}")
+            b = bytearray(_bcd_le(v, 5))
+            high = 0
+            if value < 0:
+                high |= 0xC0  # D7D6 = 11B 负
+            if unit_hour:
+                high |= 0x30  # D5D4 = 11B m³/h
+            b[4] |= high
+            data.extend(b)
+        return self.build_param_set_frame(0x1F, 0x00, bytes(data), pw)
+
+    def build_set_report_threshold(
+        self, category: int, index: int, interval_min: int,
+        threshold: float, pw: int = 0,
+    ) -> bytes:
+        """设置监测参数启报阈值及固态存储间隔 (AFN=20H，§7.2.16）。
+
+        category: 参数类别 BIN(0~15，表21)；index: 同类参数编号(0~15)
+        interval_min: 固态存储间隔 1~255 min
+        threshold: 雨量启报阈值 0.1~9.9 mm（1B BCD，低位在前）
+        """
+        if not 0 <= category <= 15:
+            raise EncodeError(f"参数类别超范围(0~15): {category}")
+        if not 0 <= index <= 15:
+            raise EncodeError(f"参数编号超范围(0~15): {index}")
+        if not 1 <= interval_min <= 255:
+            raise EncodeError(f"固态存储间隔超范围(1~255 min): {interval_min}")
+        if not 0.1 <= threshold <= 9.9:
+            raise EncodeError(f"雨量启报阈值超范围(0.1~9.9 mm): {threshold}")
+        byte1 = ((category & 0x0F) << 4) | (index & 0x0F)
+        data = bytes([byte1, interval_min, _bcd_byte(int(round(threshold * 10)))])
+        return self.build_param_set_frame(0x20, 0x00, data, pw)

@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.2.7  
+> 版本：v1.2.8  
 > 最后更新：2026-09-14  
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（test_sl651.py, 53 项 + test_round1_blindspots.py, 10 项）
+├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 53 项、test_round1_blindspots.py 10 项、test_simulator_integration.py 4 项、test_fuzz_decoders.py 2 组、test_sl427_param_afn.py 11 组）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -227,6 +227,16 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_set_clock(dt, pw)` | ✅ | 设置时钟 (AFN=11)，星期月复合字节 |
 | `build_set_work_mode(mode, pw)` | ✅ | 设置工作模式 (AFN=12) |
 | `build_set_recharge(amount, pw)` | ✅ | 设置充值量 (AFN=15) |
+| `build_set_recharge_alarm(amount_m3, pw)` | ✅ | 剩余水量报警值 (AFN=16) |
+| `build_set_level_limits(points, pw)` | ✅ | 水位基值/上下限 (AFN=17) |
+| `build_set_pressure_limits(points, pw)` | ✅ | 水压上/下限 (AFN=18) |
+| `build_set_water_quality(afn, params, pw)` | ✅ | 水质参数种类及上/下限 (AFN=19/1A) |
+| `build_set_water_amount(values, pw)` | ✅ | 水量初始值 (AFN=1B) |
+| `build_set_relay_code_len(seconds, pw)` | ✅ | 中继引导码长值 (AFN=1C) |
+| `build_set_relay_addr(addr_list, pw)` | ✅ | 中继转发监测站地址 (AFN=1D) |
+| `build_set_relay_auto_switch(value, pw)` | ✅ | 中继自动切换/自报 (AFN=1E) |
+| `build_set_flow_limits(points, pw)` | ✅ | 流量参数上限值 (AFN=1F) |
+| `build_set_report_threshold(category, index, interval_min, threshold, pw)` | ✅ | 启报阈值及固态存储间隔 (AFN=20) |
 | `build_set_ic_card_on/off(pw)` | ✅ | IC卡功能 (AFN=30/31) |
 | `build_param_set_frame(afn, func, data, pw, tp, key1)` | ✅ | 通用参数设置帧模板（PW 校验统一抛 EncodeError） |
 
@@ -336,7 +346,7 @@ python web/app.py
 | `test_sl651_ascii_reserved_id` | SL651 | ASCII 编码器拒绝保留引导符 ST/TT（v1.2.6 B3） |
 | `test_sl651_uniform_report` | SL651 | 0x31 均匀报标识符组一次 + 12 组数据（v1.2.7 C-1） |
 | `test_sl651_f5_fixed_length` | SL651 | F5 定义符失配按固定 24B 解析 + 告警（v1.2.7 M-1） |
-| `test_sl427_84_tp` | SL427 | AFN=84 电压帧写入并解析 Tp（v1.2.7 M-2） |
+| `test_sl427_84_no_tp` | SL427 | AFN=84 自报帧仅 2B 电压、无 Tp（v1.2.7 M-2） |
 | `test_sl651_bcd_overflow_contract` | SL651 | BCD 超限抛 EncodeError（v1.2.7 M-3） |
 | `test_sl427_bcd_overflow_contract` | SL427 | 电压/充值/密码超限抛 EncodeError（v1.2.7 M-3） |
 | `test_sl651_body_len_limit` | SL651 | 正文 >4095 抛 EncodeError（v1.2.7 M-5） |
@@ -344,7 +354,16 @@ python web/app.py
 | `test_sl427_addr_method` | SL427 | 地址方式1/方式2 判定（v1.2.7 L-4） |
 | `test_sl651_ascii_uniform` | SL651 | 0x31 ASCII 均匀报：时间步长码 DRxnn + 单标识符多值数组（v1.2.7） |
 
-**总计: 53 项**，全部通过。另有 `tests/test_round1_blindspots.py` 10 项盲区测试全部通过。
+**总计: 53 项**，全部通过。统一入口 `python tests/run_all.py` 依次运行全部套件。
+
+### 7.4 辅助测试套件
+
+| 套件 | 内容 |
+|------|------|
+| `test_round1_blindspots.py` | 10 项盲区测试（小时报往返/异常、SL427 81/82/84、充值量数值级） |
+| `test_simulator_integration.py` | 4 组端到端集成（引擎全链路、雨量加报边沿、站点注册、TcpSender 真实 TCP 收发） |
+| `test_fuzz_decoders.py` | SL651/SL427 解码器变异测试（各 600 次，断言仅抛受控 `DecodeError`） |
+| `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -414,12 +433,22 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 小时报 F4 雨量组 | ✅ |
 | 盲区测试全覆盖（10/10 通过） | ✅ |
 
+### ✅ 已完成（v1.2.8 增补）
+
+| 任务 | 说明 |
+|------|------|
+| 统一测试入口 + CI | `tests/run_all.py`、`.github/workflows/ci.yml` |
+| 模拟器端到端集成测试 | `tests/test_simulator_integration.py`（含真实 TCP 收发） |
+| 解码器变异/模糊测试 | `tests/test_fuzz_decoders.py`（SL651/SL427 各 600 次） |
+| SL427 参数设置 AFN 16H~20H | 11 个便捷方法 + 数据域布局测试（`tests/test_sl427_param_afn.py`） |
+
 ### ⬜ 远期（P4）
 
 | 任务 | 说明 |
 |------|------|
-| 多包 (SYN/ETB) 拼接重组 | SYN 单帧偏移已处理，不支持跨帧拼接 |
-| 模拟器集成测试 | 端到端 MQTT broker 联调 |
-| SL427 参数设置全量 AFN | 当前通用模板 + 6 个便捷方法，剩余 ~20 个变长 AFN 未实现具体数据域 |
-| 45H 状态位 32 位全量 | 当前缩减为 12 位 |
-| SL427 ASCII 编码帧 | SL427 文本帧解码 |
+| 多包 (SYN/ETB) 拼接重组 | SYN 单帧偏移已处理，不支持跨帧拼接（规约表18：6 位包总数/序列号） |
+| SL427 参数设置全量 AFN | 已完成 10H~20H/30H~31H；剩余查询类 50H~65H、复位 90H~96H、配置 A0H~A2H 等 |
+| SL427 查询类帧解码 | 当前下行参数/查询帧仅显示「下行报文」，未解析数据域 |
+| 模拟器 MQTT broker 联调 | 已覆盖内存/TCP 全链路；MQTT 需 mqtts CLI 环境 |
+| ~~45H 状态位 32 位全量~~ | **不存在**：规约表58 仅定义 BIT0~BIT11，BIT12~31 为保留，当前 12 位实现与规约一致 |
+| ~~SL427 ASCII 编码帧~~ | **不存在**：SL427-2021 全文无 ASCII/字符编码，帧结构固定为 68H…16H 二进制 |
