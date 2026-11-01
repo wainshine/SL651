@@ -317,7 +317,11 @@ class SL651Decoder:
             raise TypeError(f"feed() 需要 bytes，实际 {type(data).__name__}")
         self._buf += bytes(data)
         out: list[DecodedMessage] = []
+        steps = 0
         while True:
+            steps += 1
+            if steps % 64 == 0:
+                self._evict_pending()
             frame, consumed = self._extract_frame(self._buf)
             if consumed:
                 self._buf = self._buf[consumed:]
@@ -424,7 +428,8 @@ class SL651Decoder:
                     continue
                 body_len = ((buf[i + 11] & 0x0F) << 8) | buf[i + 12]
                 total = C.BODY_OFFSET + body_len + 3
-                if i + total <= n and buf[i + total - 3] in (C.ETX, C.ETB, C.EOT, C.ENQ):
+                if i + total <= n and buf[i + total - 3] in (
+                    C.ETX, C.ETB, C.EOT, C.ENQ, C.ACK, C.NAK, C.ESC):
                     return i
                 continue
             if buf[i] == C.SOH and i + 1 < n and buf[i + 1] != C.SOH:
@@ -974,13 +979,15 @@ class SL651Decoder:
 
             # 0xFF 负数前缀仅适用 BCD 编码（规约 6.6.3.3），Hex 型数据的 0xFF 是合法字节
             is_neg = raw_hex[:2] == "ff" and f_len > 1 and dt != "Hex"
-            if allow_a_pad and raw_hex[:1].upper() == "A" and dt is None:
-                warnings.append(
-                    f"要素 {code.upper()} 首半字节为 A，按规约 6.6.3.3b A 补齐 BCD 解析")
-            elements.extend(self._make_element(
+            made = self._make_element(
                 code, desc, unit, dt, raw_hex, f_len, f_dec, is_neg, is_cust,
                 allow_a_pad=allow_a_pad,
-            ))
+            )
+            elements.extend(made)
+            if (allow_a_pad and raw_hex[:1].upper() == "A" and dt is None
+                    and any(e.value != "-" for e in made)):
+                warnings.append(
+                    f"要素 {code.upper()} 首半字节为 A，按规约 6.6.3.3b A 补齐 BCD 解析")
             if dt == "STATUS" and code == "45":
                 try:
                     sv_status = int(raw_hex, 16)

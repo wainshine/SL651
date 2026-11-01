@@ -39,6 +39,7 @@ python tests/test_sl651.py
 - **工具包 README**：`sl651-toolkit/README.md`
 - **各模块 README**：`sl651/README.md`、`sl427/README.md`、`simulator/README.md`、`tools/README.md`、`web/README.md`
 - **v1.4.0 修复闭环**：`sl651-toolkit/docs/fix_report_v1.4.0.md`
+- **v1.4.1 自审计**：`sl651-toolkit/audit/self_audit_v1.4.1.md`
 
 ## 行业规范
 

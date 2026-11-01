@@ -42,6 +42,17 @@ def _mask_station(value: str) -> str:
     return value[:2] + "********"
 
 
+def _mask_addr(value: str) -> str:
+    """SL427 地址域脱敏：保留方式标签，遮蔽行政区划/站址/编码。"""
+    if not value:
+        return value
+    if value.startswith("方式1"):
+        return "方式1 行政区划:****** 站址:**** (已脱敏)"
+    if value.startswith("方式2"):
+        return "方式2 站点编码:******** (已脱敏)"
+    return "**"
+
+
 def _mask_raw(hex_str: str, show_raw: bool = False, function_code: int | None = None) -> str:
     """原始报文脱敏：默认只显示前缀/长度/功能码，--show-raw 时原样。"""
     if show_raw:
@@ -102,7 +113,7 @@ def format_sl427(result, show_raw: bool = False) -> str:
     lines.append("-" * 72)
     lines.append(f"方向          : {result.direction}")
     lines.append(f"控制功能码    : {result.ctrl_func_name}")
-    lines.append(f"地址          : {result.addr_display}")
+    lines.append(f"地址          : {_mask_addr(result.addr_display)}")
     lines.append(f"AFN           : 0x{result.afn:02X} ({result.afn_name})")
     lines.append(f"用户数据长度  : {result.data_len} 字节")
     lines.append(
@@ -139,8 +150,7 @@ def _sanitize_dict(d: dict) -> dict:
     if "station_addr" in d and d["station_addr"]:
         d["station_addr"] = _mask_station(d["station_addr"])
     if "addr" in d and d["addr"]:
-        # SL427 地址域含行政区划/站址，整体保留类型提示即可
-        d["addr"] = d["addr"]
+        d["addr"] = _mask_addr(d["addr"])
     return d
 
 

@@ -232,6 +232,14 @@ def test_cli_masking() -> None:
     assert bad.returncode == 2
     assert data["errors"] and "7E7E…" in data["errors"][0]["message"]
     assert "7E7E0100000000000000DEAD0032" not in bad.stdout
+
+    # SL427 地址域同样脱敏
+    hex427 = _enc427().build_heartbeat().hex().upper()
+    out427 = subprocess.run([sys.executable, str(cli), "sl427", "--hex", hex427],
+                            capture_output=True, text=True)
+    assert out427.returncode == 0, out427.stderr
+    assert "110108" not in out427.stdout and "1284" not in out427.stdout
+    assert "方式1" in out427.stdout and "已脱敏" in out427.stdout
     print("    CLI 脱敏/--show-raw OK")
 
 

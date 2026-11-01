@@ -833,7 +833,11 @@ class SL427Decoder:
             raise TypeError(f"feed() 需要 bytes，实际 {type(data).__name__}")
         self._buf += bytes(data)
         out: list[DecodedMessage] = []
+        steps = 0
         while True:
+            steps += 1
+            if steps % 64 == 0:
+                self._evict_pending()
             frame, consumed = self._extract_frame(self._buf)
             if consumed:
                 self._buf = self._buf[consumed:]
@@ -1213,9 +1217,10 @@ class SL427Decoder:
                 ))
             else:
                 # 数据域不足 D+alarm+state+Tp，降级按功能码解析现有数据
+                missing = "Tp" if raw_len >= 4 else "alarm/state/Tp"
                 warnings.append(
                     f"AFN=C0 数据域仅 {raw_len} 字节（<{C.TP_LEN + 4}），"
-                    "缺少 alarm/state/Tp，按现有数据降级解析"
+                    f"缺少 {missing}，按现有数据降级解析"
                 )
                 if func_code == 0x0E:
                     elements.extend(_parse_statistical_rainfall(data_field))
@@ -1286,9 +1291,10 @@ class SL427Decoder:
                     is_time=True, byte_len=C.TP_LEN,
                 ))
             else:
+                missing = "Tp" if raw_len >= 4 else "alarm/state/Tp"
                 warnings.append(
                     f"AFN={afn:02X}H 数据域仅 {raw_len} 字节（<{C.TP_LEN + 4}），"
-                    "缺少 alarm/state/Tp，按现有数据降级解析"
+                    f"缺少 {missing}，按现有数据降级解析"
                 )
                 if func_code == 0x0E:
                     elements.extend(_parse_statistical_rainfall(data_field))
