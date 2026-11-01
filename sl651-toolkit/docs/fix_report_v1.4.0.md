@@ -1,15 +1,15 @@
-# SL651-Toolkit v1.4.0 修复闭环报告
+# SL651-Toolkit v1.4.0 修复闭环报告（v1.4.1 勘误）
 
 > 基线：v1.3.2 / git `5b02471`  
-> 版本：v1.4.0（2026-11-02）  
+> 版本：v1.4.0（2026-11-02；v1.4.1 勘误 2026-11-02）
 > 测试：`python3 -B tests/run_all.py` → **10/10 套件通过**；福建 23 条 / 北京 25 条 rc=0  
 > 输入：`audit_report_v2.5.md`（4M+11L）、`audit_report_v2.6.md`（1M+8L）、v2.6 补充审计（L-12~L-17 + 1 潜伏）
 
 ## 一、结论
 
-30 项待修 + 1 项潜伏观察全部处理；其中 **v2.5 M-4 经复现降为 Low**（表 24 D12 表明 C0 的 0x0D 本是 2B 电压，报告复现的 4B 帧是畸形短帧；审计 B 的 15B D=4B 也是非标准 D 长度）。最终严重度口径为 **4M+26L**。
+30 项待修 + 1 项潜伏观察全部处理；其中 **v2.5 M-4 经复现降为 Low**。规约证据链：§7.5.5（AFN=84 自报电压，类型码 1101B，D=2B）、§7.3.22 n)（B0 查询输入电压 2B+4B）、表 24 D12「报警或状态(监测终端机电压)」；§7.5.2b 明确 81 的 0x0D 无中间参数；§7.5.6 的 C0 自报条件不含电压，故 C0+0x0D 属规约未定义场景，按 §7.3.22 n 的 2B 电压作最一致解读。报告复现的 4B 帧与审计 B 的 15B D=4B 均非标准 D 长度，实现改为可观测降级。最终严重度口径为 **4M+26L**。
 
-新增 2 个套件：`test_sl427_multiframe.py`（8 组）、`test_protocol_contracts.py`（12 组）；`test_sl651_multipacket.py` +3 组；`run_all.py` 8 → 10。
+新增 2 个套件：`test_sl427_multiframe.py`（11 组）、`test_protocol_contracts.py`（12 组）；`test_sl651_multipacket.py` +3 组；`run_all.py` 8 → 10。
 
 ## 二、逐项闭环
 
@@ -20,7 +20,7 @@
 | M-1 | SYN 逐包 CRC；seq==1/总包数/同 seq 内容变化重置；坏包不入缓存 | `test_syn_corrupt_packet_rejected`；多包套件全过 |
 | M-2 | 综合参数按位图定长切块，填充块输出 `-` 且不吞下一参数 | `test_comprehensive_and_fill` |
 | M-3 | 缓存 64 组/8MB/TTL 300s；`errors`/`dropped_frames`；谎报长度重同步 | `test_pending_bounded`、`test_false_length_resync` |
-| M-4（降 L） | 0x0D 上下文：B0/C0/84 电压，81 无中间参数；短帧/异常 D 长度降级 | `test_0d_contexts` |
+| M-4（降 L） | 0x0D 上下文：B0/84/C0/82 电压（C0 为规约未定义场景的 2B 解读），81 无中间参数；短帧/异常 D 长度降级 | `test_0d_contexts` |
 | L-1 | 标量填充输出 `-` | `test_comprehensive_and_fill` |
 | L-2 | 旧双 SOH 方言可 `feed()` | `test_legacy_ascii_feed_and_garbage_resync` |
 | L-3 | F4 0~25.4 / F5 0~655.34，非法值抛 `EncodeError`；84 文案 0~99.99 | `test_hourly_bounds_and_def_byte` |
@@ -74,3 +74,15 @@
 2. **SL651 跨报文混组**：协议无报文 ID，极端丢包+交错仍可能混组；已用逐包 CRC/seq1/TTL/上限降低，文档化。
 3. **Mqttx 长连接/paho**：v1.4.0 仅文档 + warning，paho 留 v1.5。
 4. **Web 脱敏**：CLI 已默认脱敏；Web 本机调试界面未强制遮罩。
+
+
+## 五、v1.4.1 勘误
+
+| 项 | 修正 |
+|---|---|
+| SL427 81 分支 0x0D | `_parse_0d_payload("c0", ...)` → `afn_hex`；81 非空 D 不再误判电压，改为原始摘要 + warning；新增回归 |
+| M-4 引证 | fix_report 改为 §7.5.5 / §7.3.22 n) / 表24 D12；明确 C0+0x0D 为规约未定义场景 |
+| 孤立 DIVS=1 | 入组即写 warning；TTL 淘汰时把 warning 带入 error |
+| SL651 重同步 | 识别 ENQ/EOT 结尾帧 |
+| 测试 | 新增手工按表3 拼 B0 分帧、3 帧乱序 1/3/2、SL427 缓存上限/TTL |
+| 版本 | 1.4.0 → 1.4.1 |

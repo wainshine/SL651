@@ -183,6 +183,15 @@ def test_0d_contexts() -> None:
 
     r = SL427Decoder().decode(enc.build_self_report_84(12.34))
     assert any(e.value == "12.34" for e in r.elements)
+
+    # 81 + 0x0D + 非空 D：按 §7.5.2b「其他参数无中间字节」降级为原始摘要
+    r = SL427Decoder().decode(enc.build_self_report_81(
+        0x0D, bytes.fromhex("6012"), alarm=1, state=2))
+    assert not any(e.name == "电压/报警状态" for e in r.elements), \
+        [(e.name, e.value) for e in r.elements]
+    assert any(e.name == "0x0D 参数原始数据" and "6012" in str(e.value)
+               for e in r.elements), [(e.name, e.value) for e in r.elements]
+    assert any("0x0D" in w for w in r.warnings), r.warnings
     print("    0x0D 上下文矩阵 OK")
 
 

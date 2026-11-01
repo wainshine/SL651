@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.4.0
+> 版本：v1.4.1
 > 最后更新：2026-11-02
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -302,7 +302,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 **辅助函数**: `make_ctrl()`, `encode_address()`, `encode_tp()`
 
-**参数校验（v1.4.0）**: `encode_address` 方式1 `admin_code` 限 `110000~829999`、`stn_id` 1~60000；`make_ctrl`/`encode_pw`/`build_heartbeat`/`build_set_work_mode`/`build_self_report_84`/`alarm`/`state`/各数值入口统一抛 `EncodeError`（与 SL651 共享 `sl651.errors`）。
+**参数校验（v1.4.1）**: `encode_address` 方式1 `admin_code` 限 `110000~829999`、`stn_id` 1~60000；`make_ctrl`/`encode_pw`/`build_heartbeat`/`build_set_work_mode`/`build_self_report_84`/`alarm`/`state`/各数值入口统一抛 `EncodeError`（与 SL651 共享 `sl651.errors`）。
 
 ---
 
@@ -436,9 +436,9 @@ python web/app.py
 | `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 + 10H 地址长度/A2H 信道地址长度校验（v1.3.1 M-4） |
 | `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 + 0xAA/0xFF 缺测填充容错（v1.3.1 M-2） |
 | `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 + 0xAA 填充容错（v1.3.1 M-2） |
-| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通、ASCII 方向位保留、逐包 CRC 拒绝、缓存上限、旧方言/重同步（v1.4.0） |
-| `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`（v1.4.0） |
-| `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏（v1.4.0） |
+| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通、ASCII 方向位保留、逐包 CRC 拒绝、缓存上限、旧方言/重同步（v1.4.1） |
+| `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`（v1.4.1） |
+| `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏（v1.4.1） |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -542,12 +542,12 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 审计 v2.3 L 级修复 | L-1 5CH 名称 / L-2 ASCII 方向位 / L-3 死键 / L-4 0x26 量程注释 / L-5 示例注释 / L-6 文档计数 |
 | 测试增强 | 主套件 57 → 59 项；辅助套件补 0xAA 填充容错、地址长度校验、ASCII 方向位 |
 
-### ✅ 已完成（v1.4.0）
+### ✅ 已完成（v1.4.1）
 
 | 任务 | 说明 |
 |------|------|
 | 审计 v2.5/v2.6/补充修复 | SL651 SYN 逐包 CRC/缓存上限/错误通道；SL427 DIV 分帧；综合参数/填充/0x0D/45H；编码器契约；CLI 脱敏；TcpSender/YAML/雨量站 |
-| 测试增强 | 8 → 10 套件（新增 SL427 分帧 8 组、协议契约 12 组；多包套件 +3 组） |
+| 测试增强 | 8 → 10 套件（新增 SL427 分帧 11 组、协议契约 12 组；多包套件 +3 组） |
 
 ### ⬜ 远期（P4）
 
@@ -557,5 +557,5 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | SL651 41H/42H/43H 参数标识符细化 | 当前按附录D 引导符列表构造，具体参数定义未全量收录 |
 | SL427 下行参数/查询帧解码 | 下行帧当前仅显示「下行报文」摘要，未回显命令数据域 |
 | 模拟器 MQTT broker 联调 | 已覆盖内存/TCP 全链路；MQTT 需 mqttx CLI 环境 |
-| 45H 状态位保留位 | 表58 定义 BIT0~11，表60 数据为 4B；v1.4.0 已按 4B/12 有效位实现，保留位非零写 `warnings` |
+| 45H 状态位保留位 | 表58 定义 BIT0~11，表60 数据为 4B；v1.4.1 已按 4B/12 有效位实现，保留位非零写 `warnings` |
 | ~~SL427 ASCII 编码帧~~ | **不存在**：SL427-2021 全文无 ASCII/字符编码，帧结构固定为 68H…16H 二进制 |

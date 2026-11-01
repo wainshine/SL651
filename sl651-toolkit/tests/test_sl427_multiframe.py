@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sl427 import SL427Decoder, SL427Encoder, encode_address, make_ctrl
+from sl651.crc import crc8
 
 FAILURES: list[str] = []
 
@@ -150,6 +151,62 @@ def test_encoder_divs_symmetry() -> None:
     print("    encoder divs 对称性 OK")
 
 
+def test_b0_manual_frame() -> None:
+    """按规约表3 手工拼 B0 分帧（不依赖项目 encoder），验证重组。"""
+    addr = encode_address(1, 110108, 1284)
+    ctrl1 = make_ctrl(dir_=1, func_code=0x0D)
+    ctrl2 = make_ctrl(dir_=1, func_code=0x0D, div=1)
+    payload = bytes.fromhex("6012") + bytes.fromhex("0100") + bytes.fromhex("0200")
+
+    def binary(ctrl: int, divs: int | None, data: bytes) -> bytes:
+        user = bytes([ctrl]) + (bytes([divs]) if divs is not None else b"") + addr + bytes([0xB0]) + data
+        return bytes([0x68, len(user), 0x68]) + user + bytes([crc8(user), 0x16])
+
+    single = binary(ctrl1, None, payload)
+    expected = _elements(SL427Decoder().decode(single))
+    mid = len(payload) // 2
+    f1 = binary(ctrl2, 2, payload[:mid])
+    f2 = binary(ctrl2, 1, payload[mid:])
+    d = SL427Decoder()
+    out = d.feed(f1) + d.feed(f2)
+    assert len(out) == 1 and out[0].reassembled and out[0].crc_ok
+    assert _elements(out[0]) == expected
+    print("    手工拼 B0 分帧重组 == 单帧 OK")
+
+
+def test_b0_out_of_order_three() -> None:
+    enc = _enc()
+    payload = bytes.fromhex("6012") + bytes.fromhex("0100") + bytes.fromhex("0200") + b"\x03\x04\x05"
+    third = len(payload) // 3
+    parts = [payload[:third], payload[third:2 * third], payload[2 * third:]]
+    frames = {
+        3: _packet(enc, 0xB0, parts[0], 3),
+        2: _packet(enc, 0xB0, parts[1], 2),
+        1: _packet(enc, 0xB0, parts[2], 1),
+    }
+    d = SL427Decoder()
+    out = d.feed(frames[1]) + d.feed(frames[3]) + d.feed(frames[2])
+    assert len(out) == 1 and out[0].reassembled and out[0].packet_count == 3
+    print("    3 帧乱序 1/3/2 重组 OK")
+
+
+def test_pending_cap_and_ttl() -> None:
+    enc = _enc()
+    d = SL427Decoder()
+    for i in range(120):
+        e = SL427Encoder(encode_address(1, 110108, i + 1))
+        d.feed(_packet(e, 0xB0, b"\x00" * 6, 2))
+    assert len(d._pending) <= d._pending_max_groups, len(d._pending)
+
+    d2 = SL427Decoder()
+    d2.feed(_packet(enc, 0xB0, b"\x00" * 6, 2))
+    for meta in d2._pending_meta.values():
+        meta["updated"] -= d2._pending_ttl + 1
+    d2.feed(b"")
+    assert d2.errors and "超时" in d2.errors[0], d2.errors
+    print(f"    分帧缓存上限 {len(d._pending)} 组 + TTL 淘汰 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL427 分帧重组测试")
@@ -163,6 +220,9 @@ def main() -> int:
         ("单帧 DIVS=1", test_single_divs_one_in_feed_and_decode),
         ("C0/83 安全降级", test_c0_and_83_div_safe_degrade),
         ("encoder divs", test_encoder_divs_symmetry),
+        ("手工拼 B0", test_b0_manual_frame),
+        ("3 帧乱序", test_b0_out_of_order_three),
+        ("缓存上限/TTL", test_pending_cap_and_ttl),
     ]
     for name, fn in tests:
         print(f">>> {name}")

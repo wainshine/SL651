@@ -948,6 +948,10 @@ class SL427Decoder:
             group.clear()
             meta["warnings"].append(f"DIVS={divs} 内容变化，重置该分帧组")
         group[divs] = frame
+        if max(group) == 1 and not self.allow_single_div:
+            if not any("孤立" in w for w in meta["warnings"]):
+                meta["warnings"].append(
+                    "孤立 DIVS=1 分片，等待其他分片确认（默认不按单帧解析）")
 
         # DIVS=1 可能先到（乱序），因此每次加入分片后都检查是否已可组装
         if 1 not in group:
@@ -994,7 +998,8 @@ class SL427Decoder:
             if now - meta["updated"] > self._pending_ttl:
                 self._pending.pop(key, None)
                 self._pending_meta.pop(key, None)
-                self._record_error("分帧组超时淘汰")
+                detail = "；".join(meta.get("warnings", []))
+                self._record_error("分帧组超时淘汰" + (f": {detail}" if detail else ""))
 
         def total_bytes() -> int:
             return sum(sum(len(v) for v in g.values()) for g in self._pending.values())
@@ -1122,10 +1127,13 @@ class SL427Decoder:
         self, afn_hex: str, real_data: bytes,
         elements: list[ElementValue], warnings: list[str],
     ) -> None:
-        """0x0D 上下文分派（表24 D12 / §7.3.22 n)）。
+        """0x0D 上下文分派（表24 D12 / §7.3.22 n) / §7.5.5 / §7.5.2b）。
 
-        - B0/C0/82：D=2B 电压；D=0 时无参数；其他长度写原始摘要 + warning。
-        - 81：0x0D 无中间参数；D 非空写原始摘要 + warning。
+        - B0（§7.3.22 n）、84（§7.5.5）、C0/82（表24 D12 的终端电压子类）：
+          D=2B 电压；D=0 时无参数；其他长度写原始摘要 + warning。
+        - 81（§7.5.2b）：0x0D 属「其他参数」，无中间参数；D 非空写原始摘要 + warning。
+        - C0+0x0D 的布局规约未明文定义（§7.5.6 自报条件不含电压），
+          按 §7.3.22 n 的 2B 电压格式作最一致解读，非 2B 一律可观测降级。
         """
         if not real_data:
             return
@@ -1188,7 +1196,8 @@ class SL427Decoder:
                 alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                 real_data = data_field[:-C.TP_LEN - 4]
                 if func_code == 0x0D:
-                    self._parse_0d_payload("c0", real_data, elements, warnings)
+                    # 81 无中间参数（§7.5.2b）；82 与 C0 同为 2B 电压（表24 D12）
+                    self._parse_0d_payload(afn_hex, real_data, elements, warnings)
                 elif len(real_data) > 0:
                     if func_code == 0x0E:
                         elements.extend(_parse_statistical_rainfall(real_data))
@@ -1262,7 +1271,7 @@ class SL427Decoder:
                     alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                     real_data = data_field[:-C.TP_LEN - 4]
                 if func_code == 0x0D:
-                    self._parse_0d_payload("c0", real_data, elements, warnings)
+                    self._parse_0d_payload(afn_hex, real_data, elements, warnings)
                 elif len(real_data) > 0:
                     if func_code == 0x0E:
                         elements.extend(_parse_statistical_rainfall(real_data))

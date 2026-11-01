@@ -424,7 +424,7 @@ class SL651Decoder:
                     continue
                 body_len = ((buf[i + 11] & 0x0F) << 8) | buf[i + 12]
                 total = C.BODY_OFFSET + body_len + 3
-                if i + total <= n and buf[i + total - 3] in (C.ETX, C.ETB):
+                if i + total <= n and buf[i + total - 3] in (C.ETX, C.ETB, C.EOT, C.ENQ):
                     return i
                 continue
             if buf[i] == C.SOH and i + 1 < n and buf[i + 1] != C.SOH:
