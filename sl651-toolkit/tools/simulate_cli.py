@@ -37,6 +37,7 @@ from simulator import (
 )
 from simulator.engine import SimulatorEngine
 from simulator.sender import SendError
+from sl651.errors import EncodeError
 
 STATION_MAP = {
     "water_level": WaterLevelStation,
@@ -76,6 +77,37 @@ def _validate_addr(addr: str) -> None:
 def _validate_interval(interval: float) -> None:
     if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
         raise ValueError(f"interval 必须为正数秒，当前: {interval!r}")
+
+
+def _validate_function_code(value) -> int:
+    """校验模拟器上报功能码；仅允许正文与定时报同构的 0x30/0x32/0x33。"""
+    if isinstance(value, bool):
+        raise ValueError(f"function_code 不能为布尔值: {value!r}")
+    if isinstance(value, str):
+        try:
+            code = int(value, 16)
+        except ValueError as e:
+            raise ValueError(f"function_code 不是十六进制字符串: {value!r}") from e
+    elif isinstance(value, int):
+        code = value
+    else:
+        raise ValueError(f"function_code 必须是整数或十六进制字符串: {value!r}")
+    allowed = {0x30, 0x32, 0x33}
+    if code not in allowed:
+        raise ValueError(
+            f"function_code=0x{code:02X} 不被模拟器支持（允许: "
+            + ", ".join(f"0x{x:02X}" for x in sorted(allowed))
+            + "；0x31/0x34/0x35/0x36 正文结构不同）"
+        )
+    return code
+
+
+def _validate_alert_threshold(value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"alert_threshold 必须为数值: {value!r}")
+    if value != value or value in (float("inf"), float("-inf")) or value < 0:
+        raise ValueError(f"alert_threshold 必须为有限非负数: {value!r}")
+    return float(value)
 
 
 def main() -> int:
@@ -161,11 +193,13 @@ def main() -> int:
             password=args.pwd,
             station_type=station_type,
             interval=args.interval,
-            function_code=args.function_code,
+            function_code=_validate_function_code(args.function_code),
             enable_alert=args.enable_alert,
-            alert_threshold=args.alert_threshold,
+            alert_threshold=_validate_alert_threshold(args.alert_threshold),
         )
         engine.start()
+    except (EncodeError, ValueError) as e:
+        parser.error(str(e))
     except SendError as e:
         logger.error(str(e))
         return 1
@@ -238,21 +272,27 @@ def _load_config(config_path: str) -> int:
             _validate_addr(kwargs["station_addr"])
             interval = sc.get("interval", 300)
             _validate_interval(interval)
+            function_code = _validate_function_code(sc.get("function_code", 0x32))
+            alert_threshold = _validate_alert_threshold(sc.get("alert_threshold", 0.05))
             station = cls(**kwargs)
         except (ValueError, TypeError) as e:
             print(f"stations[{idx}] 配置错误: {e}", file=sys.stderr)
             return 1
         station_type = STATION_TYPE_MAP[stype]
-        engine.add_station(
-            station,
-            center_addr=sc.get("center", 1),
-            password=sc.get("password", 0),
-            station_type=station_type,
-            interval=interval,
-            function_code=sc.get("function_code", 0x32),
-            enable_alert=sc.get("enable_alert", False),
-            alert_threshold=sc.get("alert_threshold", 0.05),
-        )
+        try:
+            engine.add_station(
+                station,
+                center_addr=sc.get("center", 1),
+                password=sc.get("password", 0),
+                station_type=station_type,
+                interval=interval,
+                function_code=function_code,
+                enable_alert=sc.get("enable_alert", False),
+                alert_threshold=alert_threshold,
+            )
+        except EncodeError as e:
+            print(f"stations[{idx}] 配置错误: {e}", file=sys.stderr)
+            return 1
 
     try:
         engine.start()

@@ -17,6 +17,8 @@ CRC8: 多项式 X7+X6+X5+X2+1 (0xE5) 初值0
 
 from __future__ import annotations
 
+from sl651.errors import EncodeError
+
 START_BYTE = 0x68
 END_BYTE = 0x16
 
@@ -157,11 +159,12 @@ CTRL_FUNC_MAP: dict[int, dict] = {
     0x0A: {"name": "水质", "byteLen": 3, "decimal": 0, "signed": True, "array": True, "unit": ""},
     0x0B: {"name": "土壤含水率", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "%"},
     0x0C: {"name": "蒸发量", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "mm"},
-    0x0D: {"name": "电压", "byteLen": 2, "decimal": 2, "signed": False, "array": False, "unit": "V"},
-    # 注: 0x0D 在规约不同上下文中含义不同
-    #   下行: 报警或状态参数 (表6)
-    #   上行: 统计雨量 (7.5.6 c)  
-    #   AFN=84H: 电压 (表B.98, 沿用 njnrs 标签)
+    0x0D: {"name": "电压/报警状态", "byteLen": 2, "decimal": 2, "signed": False, "array": False, "unit": "V"},
+    # 注: 0x0D 是上下文相关的「报警或状态参数」（表5/表6）：
+    #   - B0 查询输入电压响应: 2B 电压 + 4B alarm/state（§7.3.22 n)）
+    #   - C0 自报: 2B 电压 + alarm/state + Tp（表24 D12「报警或状态(监测终端机电压)」）
+    #   - 81 随机自报: 0x0D 无中间参数，仅 alarm + state + Tp（§7.5.2）
+    #   - AFN=84H: 专用 2B 电压（表B.98）
     0x0E: {"name": "综合参数", "byteLen": 1, "decimal": 0, "signed": False, "array": False, "unit": ""},
     0x0F: {"name": "水压", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "MPa"},
 }
@@ -216,7 +219,10 @@ def parse_ctrl(c: int) -> dict:
 
 def make_ctrl(dir_: int, func_code: int, div: int = 0, fcb: int = 0) -> int:
     """构造控制域字节 C。"""
-    return ((dir_ & 1) << 7) | ((div & 1) << 6) | ((fcb & 3) << 4) | (func_code & 0x0F)
+    for name, value, hi in (("dir_", dir_, 1), ("div", div, 1), ("fcb", fcb, 3), ("func_code", func_code, 15)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= hi:
+            raise EncodeError(f"{name} 超范围(0~{hi}): {value!r}")
+    return (dir_ << 7) | (div << 6) | (fcb << 4) | func_code
 
 
 def encode_pw(key1: int, key2: int) -> bytes:
@@ -224,10 +230,10 @@ def encode_pw(key1: int, key2: int) -> bytes:
     key1: 1 位 BCD(0~9), 密钥1, 放在 PW 第1字节高半字节
     key2: 3 位 BCD(0~999), 密钥2, 放在 PW 第1字节低半字节 + 第2字节
     """
-    if not 0 <= key1 <= 9:
-        raise ValueError(f"PW key1 超出范围: {key1} (0~9)")
-    if not 0 <= key2 <= 999:
-        raise ValueError(f"PW key2 超出范围: {key2} (0~999)")
+    if isinstance(key1, bool) or not isinstance(key1, int) or not 0 <= key1 <= 9:
+        raise EncodeError(f"PW key1 超出范围: {key1!r} (0~9)")
+    if isinstance(key2, bool) or not isinstance(key2, int) or not 0 <= key2 <= 999:
+        raise EncodeError(f"PW key2 超出范围: {key2!r} (0~999)")
     from sl651.bcd import int_to_bcd
     byte1 = (key1 << 4) | (key2 // 100)
     byte2 = int_to_bcd(key2 % 100)

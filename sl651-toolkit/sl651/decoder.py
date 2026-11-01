@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -11,9 +12,9 @@ from .bcd import (
     bcd_bytes_to_int,
     bytes_to_hex,
     bytes_to_hex_compact,
-    safe_bcd_to_int,
 )
 from .crc import crc16
+from .errors import DecodeError
 
 
 @dataclass
@@ -66,6 +67,8 @@ class DecodedMessage:
     raw_frame: bytes = b""
     frame_length: int = 0
     message_type: str = ""  # 从功能码推导的报文类型，如 "定时报"、"加报报"
+    reassembled: bool = False  # 是否由 SYN 多包重组得到
+    packet_count: int = 0      # 重组时的分包数
     warnings: list[str] = field(default_factory=list)  # 非致命解析告警（如定义符与规范不符）
 
     def to_dict(self) -> dict:
@@ -94,10 +97,6 @@ class DecodedMessage:
             "frame_length": self.frame_length,
             "warnings": list(self.warnings),
         }
-
-
-class DecodeError(Exception):
-    """解码异常。"""
 
 
 def _fmt_bcd_time_sec(hex_str: str) -> str:
@@ -133,14 +132,29 @@ def _ascii_time_step_desc(code: str) -> str | None:
     return None
 
 
-def _safe_bcd_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
-    """安全 BCD 解码，无效数据返回 '-'。负数时剥离 0xFF 前缀。"""
+def _safe_bcd_val(hex_str: str, decimals: int, neg: bool,
+                  allow_a_pad: bool = False) -> tuple[str, str]:
+    """安全 BCD 解码，无效数据返回 '-'。负数时剥离 0xFF 前缀。
+
+    allow_a_pad: 仅用于 40H~43H 配置帧的「目的地地址」类参数，允许最高半字节
+    A 补齐（规约 6.6.3.3b）；其他要素路径保持拒绝。
+    """
     c = hex_str.upper()
     if all(ch == "F" for ch in c) or (not c):
         return ("-", c)
     if neg:
         c = c[2:]  # strip FF prefix
     if not c:
+        return ("-", c)
+    if allow_a_pad and c[0] == "A":
+        digits = c[1:]
+        if digits and all(ch in "0123456789" for ch in digits):
+            v = int(digits, 10)
+            d = 10 ** decimals
+            r = v / d
+            if decimals == 0:
+                return (int(r), hex_str.upper())
+            return (r, hex_str.upper())
         return ("-", c)
     try:
         v = bcd_bytes_to_int(bytes.fromhex(c))
@@ -154,7 +168,12 @@ def _safe_bcd_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
 
 
 def _safe_hex_val(hex_str: str, decimals: int, neg: bool) -> tuple[str, str]:
-    """安全 HEX 解码。"""
+    """安全 HEX 解码。
+
+    注意：当前「全 F → '-'」会误伤合法 HEX 值 0xFF。目前 dt=="Hex" 仅
+    F2/F3（特殊分支）与 80（实际走 BCD），无活跃路径；若未来新增真正走
+    HEX 的要素，需区分「非法数据标记 FF」与「合法值 0xFF」。
+    """
     c = hex_str.upper()
     if all(ch == "F" for ch in c) or (not c):
         return ("-", c)
@@ -264,6 +283,24 @@ class SL651Decoder:
         # 多包重组缓存: key -> {seq: body_slice}
         self._pending: dict[tuple, dict[int, bytes]] = {}
         self._pending_meta: dict[tuple, dict] = {}
+        # 状态机上限/超时（v1.4.0 审计 v2.5 M-3）
+        self._pending_max_groups = 64
+        self._pending_max_bytes = 8 * 1024 * 1024
+        self._pending_ttl = 300.0
+        self._buf_max = 64 * 1024
+        self._max_frame_bytes = max(
+            C.BODY_OFFSET + 4095 + 3,
+            C.ASCII_BODY_OFFSET + 4095 + 1 + C.ASCII_CRC_LEN,
+        )
+        # 错误通道：feed() 无法解析/丢弃的帧可观测（不改变返回值）
+        self.errors: list[str] = []
+        self.dropped_frames = 0
+
+    def _record_error(self, message: str) -> None:
+        self.dropped_frames += 1
+        if len(self.errors) >= 100:
+            self.errors.pop(0)
+        self.errors.append(message)
 
     # ------------------------------------------------------------------
     # 流式解析 + 多包 (SYN/ETB) 重组
@@ -274,52 +311,81 @@ class SL651Decoder:
 
         支持跨次调用缓冲不完整帧；多包报文按 SYN 帧的「包总数/序列号」重组，
         以 ETB 表示后续还有包、ETX 表示最后一包（规约 6.3.2.5 / 表18/表22）。
+        无法解析的帧/超限缓存写入 ``errors``，``dropped_frames`` 计数。
         """
-        self._buf += data
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError(f"feed() 需要 bytes，实际 {type(data).__name__}")
+        self._buf += bytes(data)
         out: list[DecodedMessage] = []
         while True:
             frame, consumed = self._extract_frame(self._buf)
             if consumed:
                 self._buf = self._buf[consumed:]
             if frame is None:
-                break
+                if consumed == 0:
+                    if len(self._buf) > self._buf_max:
+                        # 谎报长度/持续垃圾：丢弃 1 字节重同步，避免永久阻塞
+                        self._buf = self._buf[1:]
+                        self._record_error("流式缓冲超过上限，丢弃 1 字节重同步")
+                        continue
+                    break
+                continue
             try:
                 out.extend(self._handle_frame(frame))
-            except DecodeError:
-                continue  # 跳过无法解析的帧，继续流式解析
+            except DecodeError as e:
+                self._record_error(f"丢弃 {len(frame)}B 无法解析帧: {e}")
+                continue
+        self._evict_pending()
         return out
 
     def reset(self) -> None:
-        """清空流式缓冲与多包重组状态。"""
+        """清空流式缓冲、多包重组状态与错误记录。"""
         self._buf = b""
         self._pending.clear()
         self._pending_meta.clear()
+        self.errors.clear()
+        self.dropped_frames = 0
 
     def _extract_frame(self, buf: bytes) -> tuple[bytes | None, int]:
         """从缓冲提取一个完整帧。返回 (frame, consumed)。
 
         consumed 为应从缓冲移除的字节数；frame=None 且 consumed=0 表示数据不足需等待。
+        支持 7E7E(二进制)、SOH SOH(旧双 SOH 方言)、单 SOH(新 ASCII) 三种起始。
         """
         n = len(buf)
         idx = -1
         is_ascii = False
-        for i in range(n):
-            if buf[i] == C.START_BYTE:
+        legacy = False
+        i = 0
+        while i < n:
+            b = buf[i]
+            if b == C.START_BYTE:
                 if i + 1 >= n:
                     return None, i  # 末字节可能是 7E7E 前半，保留待续
                 if buf[i + 1] == C.START_BYTE:
-                    idx, is_ascii = i, False
+                    idx, is_ascii, legacy = i, False, False
                     break
-                # 孤立 7E，跳过
-            elif buf[i] == C.SOH:
-                idx, is_ascii = i, True
+            elif b == C.SOH:
+                if i + 1 >= n:
+                    return None, i
+                if buf[i + 1] == C.SOH:
+                    idx, is_ascii, legacy = i, False, True
+                    break
+                idx, is_ascii, legacy = i, True, False
                 break
+            i += 1
         if idx < 0:
             return None, n  # 无起始符，丢弃全部
         if idx > 0:
             return None, idx  # 丢弃前导垃圾
 
-        if not is_ascii:
+        if legacy:
+            # 旧方言 0101：头部/长度域与二进制布局一致，仅起始符不同
+            if n < C.BODY_OFFSET:
+                return None, 0
+            body_len = ((buf[11] & 0x0F) << 8) | buf[12]
+            total = C.BODY_OFFSET + body_len + 3
+        elif not is_ascii:
             if n < C.BODY_OFFSET:
                 return None, 0
             body_len = ((buf[11] & 0x0F) << 8) | buf[12]
@@ -330,14 +396,62 @@ class SL651Decoder:
             try:
                 ident_raw = int(buf[19:23].decode("ascii"), 16)
             except (ValueError, UnicodeDecodeError):
-                return None, 1
+                # 帧头损坏：跳到下一个起始符（不是每次只排空 1 字节）
+                nxt = self._next_start(buf, 1)
+                return None, nxt
             body_len = (((ident_raw >> 8) & 0x0F) << 8) | (ident_raw & 0xFF)
             total = C.ASCII_BODY_OFFSET + body_len + 1 + C.ASCII_CRC_LEN
+
+        if total > self._max_frame_bytes or total < C.BODY_OFFSET + 3:
+            return None, 1
         if n < total:
+            nxt = self._find_valid_start(buf, 1)
+            if nxt is not None:
+                return None, nxt
             return None, 0
         return buf[:total], total
 
+    def _find_valid_start(self, buf: bytes, start: int) -> int | None:
+        """寻找后方一个完整合法帧的起始位置（用于谎报长度重同步）。"""
+        n = len(buf)
+        for i in range(max(1, start), n):
+            is_bin = (buf[i] == C.START_BYTE and i + 1 < n
+                      and buf[i + 1] == C.START_BYTE)
+            is_legacy = (buf[i] == C.SOH and i + 1 < n
+                         and buf[i + 1] == C.SOH)
+            if is_bin or is_legacy:
+                if i + C.STX_OFFSET > n:
+                    continue
+                body_len = ((buf[i + 11] & 0x0F) << 8) | buf[i + 12]
+                total = C.BODY_OFFSET + body_len + 3
+                if i + total <= n and buf[i + total - 3] in (C.ETX, C.ETB):
+                    return i
+                continue
+            if buf[i] == C.SOH and i + 1 < n and buf[i + 1] != C.SOH:
+                if i + 23 > n:
+                    continue
+                try:
+                    ident_raw = int(buf[i + 19:i + 23].decode("ascii"), 16)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                body_len = (((ident_raw >> 8) & 0x0F) << 8) | (ident_raw & 0xFF)
+                total = C.ASCII_BODY_OFFSET + body_len + 1 + C.ASCII_CRC_LEN
+                if i + total <= n and buf[i + total - 5] == C.ETX:
+                    return i
+        return None
+
+    @staticmethod
+    def _next_start(buf: bytes, start: int = 0) -> int:
+        """返回下一个潜在帧起始位置；没有则返回 len(buf)。"""
+        for i in range(max(0, start), len(buf)):
+            if buf[i] == C.START_BYTE or buf[i] == C.SOH:
+                return i
+        return len(buf)
+
     def _handle_frame(self, frame: bytes) -> list[DecodedMessage]:
+        legacy = len(frame) > 1 and frame[0] == C.SOH and frame[1] == C.SOH
+        if legacy:
+            return [self.decode(frame)]
         is_ascii = frame[0] == C.SOH
         stx = frame[C.ASCII_STX_OFFSET] if is_ascii else frame[C.STX_OFFSET]
         if stx != C.SYN:
@@ -345,7 +459,7 @@ class SL651Decoder:
         return self._handle_syn(frame, is_ascii)
 
     def _handle_syn(self, frame: bytes, is_ascii: bool) -> list[DecodedMessage]:
-        """处理 SYN 多包帧：缓存并按序重组，完整后合成单帧解码。"""
+        """处理 SYN 多包帧：逐包 CRC 校验、缓存并按序重组，完整后合成单帧解码。"""
         if not is_ascii:
             center = frame[2]
             station = frame[3:8]
@@ -359,6 +473,8 @@ class SL651Decoder:
             seq = ((pkt[1] & 0x0F) << 8) | pkt[2]
             body_slice = frame[C.BODY_OFFSET + 3:etx]
             end_marker = frame[etx]
+            recv_crc = (frame[-2] << 8) | frame[-1]
+            calc_crc = crc16(frame[:-2])
         else:
             try:
                 center = frame[1:3].decode("ascii")
@@ -376,30 +492,99 @@ class SL651Decoder:
             seq = int(pkt[3:6]) if pkt[3:6].isdigit() else 0
             body_slice = frame[C.ASCII_STX_OFFSET + 7:etx]
             end_marker = frame[etx]
+            try:
+                recv_crc = int(frame[-4:].decode("ascii"), 16)
+            except (ValueError, UnicodeDecodeError):
+                raise DecodeError("ASCII SYN 帧 CRC 解析失败")
+            calc_crc = crc16(frame[:-4])
 
+        if calc_crc != recv_crc:
+            raise DecodeError(
+                f"SYN 包 CRC 校验失败: 接收=0x{recv_crc:04X}, 计算=0x{calc_crc:04X}"
+            )
         if total <= 0 or not 1 <= seq <= total:
             raise DecodeError(f"SYN 包头非法: 总数={total}, 序号={seq}")
 
         key = (is_ascii, center, station, pwd, func, direction)
+        now = time.monotonic()
         meta = self._pending_meta.get(key)
-        if meta is not None and meta["total"] != total:
-            # 包总数变化，视为新序列，重置
-            self._pending[key] = {}
+        if meta is not None and (
+            meta["total"] != total or now - meta["updated"] > self._pending_ttl
+        ):
+            # 包总数变化/超时：视为新序列
+            self._pending.pop(key, None)
+            self._pending_meta.pop(key, None)
             meta = None
         if meta is None:
-            self._pending_meta[key] = {"frame": frame, "total": total}
+            meta = {
+                "frame": frame, "total": total, "created": now, "updated": now,
+                "warnings": [],
+            }
+            self._pending_meta[key] = meta
+        else:
+            meta["updated"] = now
         buf = self._pending.setdefault(key, {})
+
+        # 同一个 seq 内容不同：重发序列与残留组交错，重置
+        if seq in buf and buf[seq] != body_slice:
+            meta["warnings"].append(f"seq={seq} 内容变化，重置该多包组")
+            buf.clear()
+            meta["frame"] = frame
+        # seq==1 且缓存中已有不同的 seq=1：视为新报文（协议无报文 ID 的廉价重置启发）。
+        # 注意：只有 seq=2 先到、seq=1 后到是合法的乱序，不能重置。
+        if seq == 1 and 1 in buf and buf[1] != body_slice:
+            buf.clear()
+            meta["warnings"].append("收到新的 seq=1，重置未完成的多包组")
+            meta["frame"] = frame
         buf[seq] = body_slice
 
-        if len(buf) < total or any(i not in buf for i in range(1, total + 1)):
+        if seq < total and end_marker != C.ETB:
+            meta["warnings"].append(
+                f"seq={seq}/{total} 结束符为 0x{end_marker:02X}H（期望 ETB=0x17H）")
+        if seq == total and end_marker != C.ETX:
+            meta["warnings"].append(
+                f"末包 seq={seq} 结束符为 0x{end_marker:02X}H（期望 ETX=0x03H）")
+
+        if any(i not in buf for i in range(1, total + 1)):
             return []  # 等待其余包
 
         combined = b"".join(buf[i] for i in range(1, total + 1))
-        first = self._pending_meta[key]["frame"]
+        first = meta["frame"]
+        group_warnings = list(meta["warnings"])
         del self._pending[key]
         del self._pending_meta[key]
         synthetic = self._build_reassembled(first, combined, is_ascii)
-        return [self.decode(synthetic)]
+        msg = self.decode(synthetic)
+        msg.reassembled = True
+        msg.packet_count = total
+        if group_warnings:
+            msg.warnings.extend(group_warnings)
+        return [msg]
+
+    def _evict_pending(self) -> None:
+        """按 TTL/组数/字节数淘汰最旧的多包缓存。"""
+        now = time.monotonic()
+        for key, meta in list(self._pending_meta.items()):
+            if now - meta["updated"] > self._pending_ttl:
+                self._pending.pop(key, None)
+                self._pending_meta.pop(key, None)
+                self._record_error("多包组超时淘汰")
+
+        def total_bytes() -> int:
+            return sum(sum(len(v) for v in buf.values()) for buf in self._pending.values())
+
+        while self._pending and (
+            len(self._pending) > self._pending_max_groups
+            or total_bytes() > self._pending_max_bytes
+        ):
+            oldest = min(
+                self._pending_meta,
+                key=lambda k: (self._pending_meta[k]["created"],
+                               self._pending_meta[k]["updated"]),
+            )
+            self._pending.pop(oldest, None)
+            self._pending_meta.pop(oldest, None)
+            self._record_error("多包缓存超过组数/字节上限，淘汰最旧组")
 
     @staticmethod
     def _build_reassembled(first: bytes, combined: bytes, is_ascii: bool) -> bytes:
@@ -683,6 +868,8 @@ class SL651Decoder:
         elements: list[ElementValue] = []
         pos = 0
         is_uniform = function_code == 0x31
+        # A 补齐仅适用于 40H~43H 配置帧的目的地地址类参数（规约 6.6.3.3b）
+        allow_a_pad = function_code in (0x40, 0x41, 0x42, 0x43)
 
         while pos + 2 <= len(hex_str):
             code = hex_str[pos:pos + 2]
@@ -767,7 +954,8 @@ class SL651Decoder:
                 if not raw_hex:
                     break
                 elements.extend(self._make_element(
-                    code, desc, unit, dt, raw_hex, fixed_len, f_dec, False, is_cust
+                    code, desc, unit, dt, raw_hex, fixed_len, f_dec, False, is_cust,
+                    allow_a_pad=allow_a_pad,
                 ))
                 if is_uniform and fixed_len > 0:
                     self._consume_uniform_groups(
@@ -786,9 +974,23 @@ class SL651Decoder:
 
             # 0xFF 负数前缀仅适用 BCD 编码（规约 6.6.3.3），Hex 型数据的 0xFF 是合法字节
             is_neg = raw_hex[:2] == "ff" and f_len > 1 and dt != "Hex"
+            if allow_a_pad and raw_hex[:1].upper() == "A" and dt is None:
+                warnings.append(
+                    f"要素 {code.upper()} 首半字节为 A，按规约 6.6.3.3b A 补齐 BCD 解析")
             elements.extend(self._make_element(
-                code, desc, unit, dt, raw_hex, f_len, f_dec, is_neg, is_cust
+                code, desc, unit, dt, raw_hex, f_len, f_dec, is_neg, is_cust,
+                allow_a_pad=allow_a_pad,
             ))
+            if dt == "STATUS" and code == "45":
+                try:
+                    sv_status = int(raw_hex, 16)
+                except ValueError:
+                    pass
+                else:
+                    if sv_status >> 12:
+                        warnings.append(
+                            f"45H 状态保留位 BIT12~31 非零: 0x{sv_status >> 12:X}"
+                        )
 
             # 均匀报：标识符组只出现一次，其后为重复数据组（§6.6.4.4 表30 注d）
             if is_uniform and f_len > 0:
@@ -834,6 +1036,7 @@ class SL651Decoder:
     def _make_element(
         code: str, desc: str, unit: str, dt: str | None, raw_hex: str,
         f_len: int, f_dec: int, is_neg: bool, is_cust: bool,
+        allow_a_pad: bool = False,
     ) -> list[ElementValue]:
         if dt == "STATUS":
             return SL651Decoder._parse_status(raw_hex, f_len)
@@ -858,7 +1061,7 @@ class SL651Decoder:
                 code=code.upper(), name=desc, value=pv[0], unit=unit,
                 raw=pv[1], data_type="Hex", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
             )]
-        pv = _safe_bcd_val(raw_hex, f_dec, is_neg)
+        pv = _safe_bcd_val(raw_hex, f_dec, is_neg, allow_a_pad=allow_a_pad)
         return [ElementValue(
             code=code.upper(), name=desc, value=pv[0], unit=unit,
             raw=pv[1], data_type="BCD", byte_len=f_len, decimal=f_dec, is_sub=is_cust,
@@ -977,7 +1180,12 @@ class SL651Decoder:
 
     @staticmethod
     def _parse_status(raw_hex: str, f_len: int) -> list[ElementValue]:
-        """解析 45H 状态报警。注：当前缩减为 12 位，规范表58 为 4B/32 位。"""
+        """解析 45H 状态报警。
+
+        规约表58 定义 BIT0~BIT11（BIT12~31 保留），表60 规定遥测站状态数据为
+        4 字节 HEX。本实现兼容 2B/4B 数据宽度，取低 12 位；4B 且保留位非零时
+        追加一个可见的「保留位」要素，避免静默忽略。
+        """
         c = raw_hex.upper()
         if c and (all(ch == "F" for ch in c) or all(ch == "A" for ch in c)):
             # 全 0xFF / 0xAA 缺测填充：不展开位图，降级为单个 '-' 要素

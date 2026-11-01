@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from . import constants as C
@@ -10,13 +11,14 @@ from .bcd import (
     int_to_bcd_bytes,
 )
 from .crc import crc16
-
-
-class EncodeError(Exception):
-    """编码异常。"""
+from .errors import EncodeError
 
 
 def _make_def_byte(data_len: int, decimals: int = 0) -> int:
+    if isinstance(data_len, bool) or not isinstance(data_len, int):
+        raise EncodeError(f"数据字节数必须为整数: {data_len!r}")
+    if isinstance(decimals, bool) or not isinstance(decimals, int):
+        raise EncodeError(f"小数位数必须为整数: {decimals!r}")
     if not 0 <= data_len <= 31:
         raise EncodeError(f"数据字节数超范围(0~31): {data_len}")
     if not 0 <= decimals <= 7:
@@ -25,26 +27,68 @@ def _make_def_byte(data_len: int, decimals: int = 0) -> int:
 
 
 def _check_datetime(value: datetime, name: str) -> None:
-    """时间参数类型校验，非 datetime 抛 EncodeError。"""
+    """时间参数类型/年份校验（规约年份为 2000~2099）。"""
     if not isinstance(value, datetime):
         raise EncodeError(f"{name} 必须为 datetime，实际 {type(value).__name__}")
+    if not 2000 <= value.year <= 2099:
+        raise EncodeError(f"{name} 年份超范围(2000~2099): {value.year}")
+
+
+def _check_guide(guide: int) -> None:
+    """引导符必须为 1 字节整数。"""
+    if isinstance(guide, bool) or not isinstance(guide, int):
+        raise EncodeError(f"引导符必须为整数: {guide!r}")
+    if not 0 <= guide <= 0xFF:
+        raise EncodeError(f"引导符超范围(0~0xFF): {guide}")
+
+
+def _check_number(value: float, name: str = "值") -> None:
+    """数值必须是有限实数（拒绝 bool/str/None/NaN/inf）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EncodeError(f"{name}必须为数值，实际 {type(value).__name__}")
+    if not math.isfinite(value):
+        raise EncodeError(f"{name}必须为有限数值，实际 {value!r}")
 
 
 def _encode_bcd(value: float, data_len: int, decimals: int) -> bytes:
     """浮点数 -> BCD 编码字节。负数按 SL651 6.6.3.3 用 0xFF 前缀。"""
+    _check_number(value)
     negative = value < 0
     if negative and data_len < 2:
         raise EncodeError(f"负数编码至少需要 2 字节（0xFF 前缀 + 数据），当前 data_len={data_len}")
-    scaled = round(abs(value) * (10 ** decimals))
     try:
+        scaled = round(abs(value) * (10 ** decimals))
         if negative:
             bcd = int_to_bcd_bytes(scaled, data_len - 1)
             return b"\xFF" + bcd
         return int_to_bcd_bytes(scaled, data_len)
-    except ValueError as e:
+    except (ValueError, TypeError, OverflowError) as e:
         raise EncodeError(
             f"BCD 值超范围 (value={value}, data_len={data_len}, decimals={decimals}): {e}"
         ) from e
+
+
+def _encode_bcd_a(value: int, data_len: int) -> bytes:
+    """奇数位 BCD 地址按规约 6.6.3.3b 用 A 补齐最高位。
+
+    value 必须为非负整数；按十进制位数判断奇偶。若位数不足 data_len 字节，
+    负数/超长抛 EncodeError。例：13812345678（11 位）→ A13812345678。
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise EncodeError(f"A 补齐 BCD 值必须为非负整数: {value!r}")
+    digits = str(value)
+    max_digits = data_len * 2
+    if len(digits) > max_digits:
+        raise EncodeError(f"A 补齐 BCD 值超范围({data_len} 字节): {value}")
+    if len(digits) % 2 == 1:
+        # 最高半字节 A，其余为十进制数字；不足部分在 A 后补 0
+        digits = "A" + digits.rjust(max_digits - 1, "0")
+    else:
+        digits = digits.rjust(max_digits, "0")
+    try:
+        return bytes(int(digits[i:i + 2], 16) for i in range(0, max_digits, 2))
+    except ValueError as e:
+        raise EncodeError(f"A 补齐 BCD 编码失败: {value}: {e}") from e
 
 
 class SL651Encoder:
@@ -94,10 +138,20 @@ class SL651Encoder:
         end_marker: 报文结束符，上行默认 ETX(03H)，下行按帧类型选 ENQ/ACK/EOT/NAK/ESC。
         tx_time: 发报时间，默认当前时间。下行 4AH 校时帧传此值作为校时时钟。
         """
+        if isinstance(function_code, bool) or not isinstance(function_code, int):
+            raise EncodeError(f"function_code 必须为整数: {function_code!r}")
         if not 0 <= function_code <= 0xFF:
             raise EncodeError(f"function_code 超范围(0~0xFF): {function_code}")
+        if isinstance(direction, bool) or direction not in (C.DIR_UPLINK, C.DIR_DOWNLINK):
+            raise EncodeError(f"direction 必须为 0(上行) 或 1(下行): {direction!r}")
+        if not isinstance(ascii_mode, bool):
+            raise EncodeError(f"ascii_mode 必须为 bool: {ascii_mode!r}")
         if end_marker is None:
             end_marker = C.ETX
+        if isinstance(end_marker, bool) or not isinstance(end_marker, int) or not 0 <= end_marker <= 0xFF:
+            raise EncodeError(f"end_marker 超范围(0~0xFF): {end_marker!r}")
+        if not isinstance(body, (bytes, bytearray)):
+            raise EncodeError(f"body 必须为 bytes，实际 {type(body).__name__}")
 
         is_downlink = direction == C.DIR_DOWNLINK
         if tx_time is not None:
@@ -174,6 +228,7 @@ class SL651Encoder:
         body.extend(ot)
 
         for guide, value, data_len, decimals in elements:
+            _check_guide(guide)
             body.append(guide)
             body.append(_make_def_byte(data_len, decimals))
             body.extend(_encode_bcd(value, data_len, decimals))
@@ -226,11 +281,13 @@ class SL651Encoder:
 
         if trigger:
             guide, value, data_len, decimals = trigger
+            _check_guide(guide)
             body.append(guide)
             body.append(_make_def_byte(data_len, decimals))
             body.extend(_encode_bcd(value, data_len, decimals))
 
         for guide, value, data_len, decimals in elements:
+            _check_guide(guide)
             body.append(guide)
             body.append(_make_def_byte(data_len, decimals))
             body.extend(_encode_bcd(value, data_len, decimals))
@@ -254,7 +311,8 @@ class SL651Encoder:
         rain_amounts: list[float | None] | None = None,
     ) -> bytes:
         """构造上行小时报正文。规约 §6.6.4.7 表36 固定 12 组 5min 水位。
-        rain_amounts: 可选 12 组 5min 雨量（F4，各 2B，单位 0.1mm）。
+        rain_amounts: 可选 12 组 5min 雨量（F4，每值 1B，单位 0.1mm）。
+        None 表示缺测（写 0xFFFF / 0xFF 非法数据标记）；负数或超上限抛 EncodeError。
         """
         if len(water_levels) != 12:
             raise EncodeError(f"小时报要求恰好 12 组水位，当前 {len(water_levels)} 组")
@@ -281,25 +339,24 @@ class SL651Encoder:
                 if rn is None:
                     body.append(0xFF)
                 else:
-                    val = int(round(rn * 10))
-                    if val < 0 or val > 255:
-                        body.append(0xFF)
-                    else:
-                        body.append(val)
+                    _check_number(rn, "小时报雨量")
+                    if rn < 0 or rn > 25.4:
+                        raise EncodeError(
+                            f"小时报雨量超范围(0~25.4mm，25.5mm 为非法数据标记): {rn}")
+                    body.append(int(round(rn * 10)))
 
         body.append(0xF5)
-        body.append(_make_def_byte(24, 2))
+        # F5 为 HEX 型固定 24B 数组，表C.1 不赋予定义符小数位语义，故用 0 位小数
+        body.append(_make_def_byte(24, 0))
         for wl in water_levels:
             if wl is None:
                 body.extend(b'\xFF\xFF')
             else:
-                val = int(round(wl * 100))
-                if val < 0:
-                    body.extend(b'\xFF\xFF')
-                elif val > 0xFFFF:
-                    raise EncodeError(f"小时报水位超范围(最大 655.35m): {wl}")
-                else:
-                    body.extend(val.to_bytes(2, 'big'))
+                _check_number(wl, "小时报水位")
+                if wl < 0 or wl > 655.34:
+                    raise EncodeError(
+                        f"小时报水位超范围(0~655.34m，655.35m 为非法数据标记): {wl}")
+                body.extend(int(round(wl * 100)).to_bytes(2, 'big'))
 
         body.append(0x39)
         body.append(_make_def_byte(4, 3))
@@ -329,6 +386,7 @@ class SL651Encoder:
         """查询指定要素正文（3AH 功能码）：列出要查询的要素引导符+定义符（数据域为空）。"""
         body = bytearray()
         for guide in element_guides:
+            _check_guide(guide)
             body.append(guide)
             body.append(_make_def_byte(0, 0))  # 查询时数据域长度为0
         return bytes(body)
@@ -368,20 +426,37 @@ class SL651Encoder:
         """查询遥测站时钟（下行，0x51，表85）。"""
         return self.build_downlink_query(0x51)
 
-    def build_set_param_body(self, params: list[tuple[int, float, int, int]]) -> bytes:
-        """参数设置正文：引导符+定义符+数据值。"""
+    def build_set_param_body(
+        self,
+        params: list[tuple[int, float, int, int]],
+        a_pad_guides: set[int] | frozenset[int] = frozenset(),
+    ) -> bytes:
+        """参数设置正文：引导符+定义符+数据值。
+
+        a_pad_guides: 需要按规约 6.6.3.3b 做 A 补齐的引导符集合（如目的地地址/短信号码）。
+        """
         body = bytearray()
         for guide, value, data_len, decimals in params:
+            _check_guide(guide)
             body.append(guide)
             body.append(_make_def_byte(data_len, decimals))
-            body.extend(_encode_bcd(value, data_len, decimals))
+            if guide in a_pad_guides:
+                if decimals != 0:
+                    raise EncodeError("A 补齐 BCD 仅支持整数（decimals=0）")
+                _check_number(value, "A 补齐 BCD")
+                if float(value) != int(value):
+                    raise EncodeError(f"A 补齐 BCD 值必须为整数: {value}")
+                body.extend(_encode_bcd_a(int(value), data_len))
+            else:
+                body.extend(_encode_bcd(value, data_len, decimals))
         return bytes(body)
 
     def build_set_param_frame(
-        self, params: list[tuple[int, float, int, int]], function_code: int = 0x40
+        self, params: list[tuple[int, float, int, int]], function_code: int = 0x40,
+        a_pad_guides: set[int] | frozenset[int] = frozenset(),
     ) -> bytes:
         """参数设置帧（下行，默认 0x40 修改基本配置表；0x42 修改运行参数，结束符 ENQ）。"""
-        return self.build_frame(function_code, self.build_set_param_body(params),
+        return self.build_frame(function_code, self.build_set_param_body(params, a_pad_guides),
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_read_config_frame(
@@ -409,7 +484,7 @@ class SL651Encoder:
         密码标识符取附录D 表D.1 #3「密码」03H，高位字节在前。
         """
         for name, v in (("旧密码", old_pw), ("新密码", new_pw)):
-            if not 0 <= v <= 0xFFFF:
+            if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 0xFFFF:
                 raise EncodeError(f"{name}超范围(0~0xFFFF): {v}")
         body = (bytes([0x03, (old_pw >> 8) & 0xFF, old_pw & 0xFF])
                 + bytes([0x03, (new_pw >> 8) & 0xFF, new_pw & 0xFF]))
@@ -422,8 +497,8 @@ class SL651Encoder:
         正文 = F2H 人工置数标识符 + 原编码（SL330，结束符 NN 省略）数据（表38/附录C 注c）。
         payload 为调用方按 SL330 约定编码的原始字节。
         """
-        if not payload:
-            raise EncodeError("人工置数数据不能为空")
+        if not isinstance(payload, (bytes, bytearray)) or not payload:
+            raise EncodeError("人工置数数据必须为非空 bytes")
         return self.build_frame(0x35, bytes([0xF2]) + bytes(payload))
 
     def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
@@ -471,6 +546,10 @@ class SL651Encoder:
         parts.append("TT")
         parts.append(obs_time.strftime("%y%m%d%H%M"))
         for code, val in elements:
+            if not isinstance(code, str) or not code:
+                raise EncodeError(f"ASCⅡ 标识符必须为非空字符串: {code!r}")
+            if not isinstance(val, str):
+                raise EncodeError(f"ASCⅡ 要素值必须为字符串: {val!r}")
             if code.upper() in ("ST", "TT"):
                 raise EncodeError(
                     f"ASCⅡ 标识符 {code!r} 为帧结构保留引导符，不能用作要素标识符"
@@ -488,6 +567,8 @@ class SL651Encoder:
         function_code: int = 0x32,
     ) -> bytes:
         """构造 ASCⅡ 编码帧（单 SOH 起始，头部为 ASCII 十六进制字符串，规格表16）。"""
+        if isinstance(function_code, bool) or not isinstance(function_code, int) or not 0 <= function_code <= 0xFF:
+            raise EncodeError(f"function_code 超范围(0~0xFF): {function_code!r}")
         if obs_time is None:
             obs_time = datetime.now()
 

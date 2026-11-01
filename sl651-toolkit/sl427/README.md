@@ -9,7 +9,7 @@
 | 文件 | 说明 |
 |------|------|
 | `constants.py` | 协议常量：AFN 表（61 项）、控制功能码表（16 种）、告警/终端状态位、参数种类/事件记录/水质参数表、`parse_ctrl`/`make_ctrl` |
-| `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派数据解析（含 50H~65H/90H~96H/A0H~A2H 响应） |
+| `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派数据解析（含 50H~65H/90H~96H/A0H~A2H 响应）；`feed()` 支持 B0/B1/84 的 DIV=1 分帧重组，C0/81/82/83 安全降级 |
 | `encoder.py` | 68H 帧编码器：自报 5 类 + 参数设置 17 类 + 查询 17 类 + 控制 7 类 + 配置 3 类 + 通用模板 |
 
 ## 核心 API
@@ -21,7 +21,14 @@ from sl427 import SL427Decoder
 
 decoder = SL427Decoder()
 r = decoder.decode_hex("681568...")  # hex 字符串
-r = decoder.decode(frame_bytes)      # bytes
+r = decoder.decode(frame_bytes)      # bytes（DIV=1 单帧只告警、不解析数据域）
+
+# 流式接收 + 分帧重组（仅 B0/B1/84；C0/81/82/83 安全降级）
+msgs = decoder.feed(chunk_bytes)
+# 孤立 DIVS=1 默认不解析；确认是单帧 DIV 时可显式开启：
+# decoder = SL427Decoder(allow_single_div=True)
+decoder.errors          # 坏帧/超时/上限事件
+decoder.dropped_frames
 ```
 
 **返回**: `DecodedMessage` 数据类，主要字段：
@@ -36,7 +43,9 @@ r = decoder.decode(frame_bytes)      # bytes
 | `crc_ok` | `bool` | CRC8 校验结果 |
 | `elements` | `list[ElementValue]` | 要素列表 |
 | `special_info` | `dict` | 特殊信息（心跳类型、图像数据等） |
-| `warnings` | `list[str]` | 非致命解析告警（如 C0/81/82 数据域过短降级解析） |
+| `warnings` | `list[str]` | 非致命解析告警（如 C0/81/82 数据域过短降级解析、分帧未重组） |
+| `reassembled` | `bool` | 是否由 DIV 分帧重组得到 |
+| `packet_count` | `int` | 分帧重组的分片数 |
 | `to_dict()` | `dict` | 转为字典 |
 
 ### `SL427Encoder`

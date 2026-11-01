@@ -11,8 +11,9 @@
 | `bcd.py` | BCD 编解码（大端/小端）、时间编解码、hex↔bytes 转换 |
 | `crc.py` | CRC-16/MODBUS（0xA001，初值 0xFFFF）、CRC8（0xE5，供 sl427 使用） |
 | `constants.py` | 协议常量：101 项 `SL651_ELEMENTS`、101 项 `SL651_ASCII_ELEMENTS`、FF 子标识符、FUNC_MAP（30 项）、STATION_TYPE（11 类）、STATUS_BITS（12 bit）、帧偏移常量 |
-| `decoder.py` | 报文解码器：定义符动态解析、ASCII 帧解析、状态位解码、CRC 校验、`feed()` 流式解析与多包 SYN/ETB 重组 |
-| `encoder.py` | 报文编码器：上行 6 类 + 下行 14 类 + ASCII 编码 + 通用帧构造 |
+| `decoder.py` | 报文解码器：定义符动态解析、ASCII 帧解析、状态位解码、CRC 校验、`feed()` 流式解析与多包 SYN/ETB 重组（逐包 CRC/上限/TTL/错误通道） |
+| `encoder.py` | 报文编码器：上行 6 类 + 下行 14 类 + ASCII 编码 + 通用帧构造；guide/数值/年份/方向统一校验 |
+| `errors.py` | 共享 `ProtocolError`/`EncodeError`/`DecodeError`（SL651 与 SL427 同一组类） |
 
 ## 核心 API
 
@@ -27,6 +28,8 @@ r = decoder.decode(frame_bytes)    # bytes
 
 # 流式解析 + 多包 (SYN/ETB) 自动重组（可分多次喂入，支持乱序）
 msgs = decoder.feed(chunk_bytes)   # -> list[DecodedMessage]
+decoder.errors          # 无法解析/丢弃的帧（最多 100 条）
+decoder.dropped_frames  # 丢弃计数
 ```
 
 **返回**: `DecodedMessage` 数据类，主要字段：
@@ -45,6 +48,8 @@ msgs = decoder.feed(chunk_bytes)   # -> list[DecodedMessage]
 | `encoding` | `str` | `"BCD"` / `"HEX"` / `"ASCII"` |
 | `crc_ok` | `bool` | CRC 校验结果 |
 | `warnings` | `list[str]` | 非致命解析告警（如 F4/F5 定义符与规范固定长度不符） |
+| `reassembled` | `bool` | 是否由 SYN 多包重组得到 |
+| `packet_count` | `int` | 重组分包数 |
 | `elements` | `list[ElementValue]` | 要素列表 |
 | `to_dict()` | `dict` | 转为字典 |
 

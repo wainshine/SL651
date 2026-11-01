@@ -47,7 +47,8 @@ class RainGenerator:
     raining: bool = False
     rain_intensity: float = 0.0  # mm/min
     rain_remaining_minutes: int = 0  # 当前降雨过程剩余分钟
-    daily_accum: float = 0.0  # 日累计
+    daily_accum: float = 0.0  # 当前日累计（0x20 当前降水量）
+    previous_day_accum: float = 0.0  # 上一日累计（0x1F 日降水量）
     hourly_accum: float = 0.0  # 小时累计
     total_accum: float = 0.0  # 不归零累计（0x26 降水量累计值，N(5,1)）
     last_hour_tick: int = -1
@@ -62,6 +63,7 @@ class RainGenerator:
         if self.last_day_tick < 0:
             self.last_day_tick = tick
         if tick - self.last_day_tick >= 1440:
+            self.previous_day_accum = self.daily_accum
             self.daily_accum = 0.0
             self.last_day_tick = tick
 

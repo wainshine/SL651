@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.3.2
+# SL651 水文规约工具包 v1.4.0
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -45,7 +45,7 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── run_all.py              # 统一测试入口（8 套件）
+│   ├── run_all.py              # 统一测试入口（10 套件）
 │   ├── test_sl651.py           # 主测试 61 项
 │   ├── test_round1_blindspots.py    # 盲区测试 10 项
 │   ├── test_simulator_integration.py # 模拟器端到端集成
@@ -254,13 +254,20 @@ python tests/test_sl651.py            # 61 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 8 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 6 组
+- `run_all.py` 共 10 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 9 组 + SL427 分帧 8 组 + 协议契约 12 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
 
 ## 五、版本历史
+
+- **v1.4.0**：审计 v2.5/v2.6/补充审计修复版
+  - 数据完整性：SL651 SYN 逐包 CRC + 跨报文重置 + 缓存上限/TTL/错误通道；SL427 DIV=1 分帧重组（B0/B1/84，C0/81/82/83 安全降级）
+  - 语义：综合参数定长块/标量填充 `-`/信道 0xFF；0x0D 上下文（B0/C0/84 电压，81 无中间参数）；45H 4B 位宽与保留位 warning
+  - 编码器：共享 `EncodeError`/`DecodeError`；guide/NaN/inf/direction/年份/mode/heartbeat/alarm/state 统一校验；小时报 F4/F5 边界；地址方式 1 范围；A 补齐 BCD（仅 40H~43H）；F5 定义符 0xC0
+  - CLI：中心站全遮、原始报文/errors 默认脱敏、`--show-raw`；`feed()`/`divs=`/`a_pad_guides=` 新 API
+  - 测试：8 → 10 套件（新增 SL427 分帧、协议契约）
 
 - **v1.3.2**：审计 v2.4 修复版（2M+5L）
   - M-1: SL427 缺测填充处理补全至**全部分支**——查询响应（状态/事件/水泵/中继/水质/种类/时钟）、控制/配置响应（90/91/92/93/94/95/A0/A1）、AFN=51 时钟，`0xAA`/`0xFF` 统一降级 `-`（原按位图/计数输出误导值）

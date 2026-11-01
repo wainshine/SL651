@@ -25,8 +25,9 @@ from .constants import (
     parse_def_byte,
 )
 from .crc import crc8, crc16, crc16_bytes
-from .decoder import DecodeError, DecodedMessage, ElementValue, SL651Decoder, decode, decode_hex
-from .encoder import EncodeError, SL651Encoder
+from .decoder import DecodedMessage, ElementValue, SL651Decoder, decode, decode_hex
+from .encoder import SL651Encoder
+from .errors import DecodeError, EncodeError, ProtocolError
 
 __all__ = [
     "bcd_to_int", "int_to_bcd", "bcd_bytes_to_int", "bcd_bytes_to_int_le",
@@ -37,8 +38,9 @@ __all__ = [
     "STATUS_BITS", "STATUS_0", "STATUS_1", "parse_def_byte",
     "crc16", "crc16_bytes", "crc8",
     "SL651Decoder", "DecodedMessage", "ElementValue", "DecodeError",
+    "ProtocolError",
     "decode", "decode_hex",
     "SL651Encoder", "EncodeError",
 ]
 
-__version__ = "1.3.2"
+__version__ = "1.4.0"

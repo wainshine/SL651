@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,11 +17,8 @@ from sl651.bcd import (
     safe_bcd_to_int,
 )
 from sl651.crc import crc8
+from sl651.errors import DecodeError
 from . import constants as C
-
-
-class DecodeError(Exception):
-    """解码异常。"""
 
 
 @dataclass
@@ -56,6 +54,8 @@ class DecodedMessage:
     special_info: dict | None = None
     byte_map: str = ""
     frame_length: int = 0
+    reassembled: bool = False
+    packet_count: int = 0
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -74,8 +74,19 @@ class DecodedMessage:
             ],
             "frame_length": self.frame_length,
             "data_len": self.data_len,
+            "reassembled": self.reassembled,
+            "packet_count": self.packet_count,
             "warnings": list(self.warnings),
         }
+
+
+def _fill_element(definition: dict, chunk: bytes, item_len: int) -> ElementValue:
+    """构造缺测填充要素（值 '-'，保留原始填充字节）。"""
+    return ElementValue(
+        name=definition["name"], value="-", unit=definition["unit"],
+        raw=bytes_to_hex_compact(chunk), byte_len=item_len,
+        decimal=definition["decimal"], signed=definition["signed"],
+    )
 
 
 def _parse_ctrl_func_data(func_code: int, data_bytes: bytes, max_items: int | None = None) -> list[ElementValue]:
@@ -98,12 +109,8 @@ def _parse_ctrl_func_data(func_code: int, data_bytes: bytes, max_items: int | No
         pos += item_len
         hex_str = bytes_to_hex_compact(chunk)
 
-        if all(b == 0xFF for b in chunk):
-            if not definition["array"]:
-                break
-            continue
-
-        if all(b == 0xAA for b in chunk):
+        if _is_fill(chunk):
+            items.append(_fill_element(definition, chunk, item_len))
             if not definition["array"]:
                 break
             continue
@@ -174,7 +181,7 @@ def _parse_flow(data: bytes, decimal: int) -> tuple[str, str, str]:
     0xAA 填充 = 缺测。
     """
     hex_str = bytes_to_hex_compact(data)
-    if all(b == 0xAA for b in data):
+    if _is_fill(data):
         return ("-", hex_str, "m³/s")
     byte5 = data[-1]
     sign_bits = (byte5 >> 6) & 0x03
@@ -190,26 +197,37 @@ def _parse_flow(data: bytes, decimal: int) -> tuple[str, str, str]:
     return (f"{r:.{decimal}f}", hex_str, unit_name)
 
 
-def _parse_comprehensive(data: bytes) -> list[ElementValue]:
+def _parse_comprehensive(data: bytes, warnings: list[str] | None = None) -> list[ElementValue]:
     """解析综合参数（0x0E 功能码）。
     按规范表45，D0~D7 依次为水质/土壤含水率/功率/气象/闸位/流量/水位/雨量。
+
+    综合参数是「按位图定长定位块」布局，每个置位 bit 恰好消费 byteLen 字节；
+    不能用数组「跳过填充找下一个值」的语义，否则填充块会吃掉下一参数的数据。
     """
     if len(data) == 0:
         return []
+    if warnings is None:
+        warnings = []
     bit_flag = data[0]
-    remaining = list(data[1:])
     offset = 0
-    items = []
+    items: list[ElementValue] = []
     for i in range(len(C.COMP_BITS)):
-        if bit_flag & (1 << i):
-            func_code = C.COMP_BITS[i]
-            definition = C.CTRL_FUNC_MAP.get(func_code)
-            item_len = definition["byteLen"] if definition else 0
-            chunk = bytes(remaining[offset:])
-            sub_items = _parse_ctrl_func_data(func_code, chunk, max_items=1)
-            items.extend(sub_items)
-            # 该 bit 对应定长数据块，无论是否解析出值（全 0xFF/0xAA 填充时无值）都必须跳过
-            offset += item_len
+        if not (bit_flag & (1 << i)):
+            continue
+        func_code = C.COMP_BITS[i]
+        definition = C.CTRL_FUNC_MAP.get(func_code)
+        item_len = definition["byteLen"] if definition else 0
+        if item_len <= 0:
+            continue
+        if 1 + offset + item_len > len(data):
+            warnings.append(
+                f"综合参数 0x0E 数据不足：bit{i} 需要 {item_len} 字节，"
+                f"剩余 {max(0, len(data) - 1 - offset)} 字节"
+            )
+            break
+        chunk = data[1 + offset: 1 + offset + item_len]
+        items.extend(_parse_ctrl_func_data(func_code, chunk, max_items=1))
+        offset += item_len
     return items
 
 
@@ -429,10 +447,16 @@ def _parse_channel_427(data: bytes) -> list[ElementValue]:
             break
         t = data[pos]
         pos += 1
-        if t == 0xAA:
-            out.append(ElementValue(name=label, value="无", unit="",
-                                    raw="AA", editable=False))
-            pos += 1  # 0xAAAA 两字节
+        if t in (0xAA, 0xFF):
+            has_second = pos < len(data) and data[pos] in (0xAA, 0xFF)
+            raw = bytes([t]) + (bytes([data[pos]]) if has_second else b"")
+            out.append(ElementValue(
+                name=label,
+                value="无",
+                unit="", raw=bytes_to_hex_compact(raw), editable=False,
+            ))
+            if has_second:
+                pos += 1  # 0xAAAA / 0xFFFF 两字节
             continue
         n = addr_len.get(t, 0)
         addr = data[pos:pos + n]
@@ -775,6 +799,217 @@ def _build_byte_map(bytes_list: list[int]) -> str:
 class SL427Decoder:
     """SL427 报文解码器。"""
 
+    #: 允许 DIV=1 重组的 AFN（无 AUX，且 L 语义按表3 字节）。
+    #: 83/61 图片帧可能使用 §6.3.3.2b 的 L×1K 语义，未证前不重组。
+    _DIV_REASSEMBLE_AFNS = frozenset({0xB0, 0xB1, 0x84})
+
+    def __init__(self, allow_single_div: bool = False) -> None:
+        # 单帧 DIVS=1 与「多帧末片」在协议层无法区分；默认不解析孤立 DIVS=1，
+        # 避免前序分片丢失/坏 CRC 时把末片当完整报文（宁可少给，不可错给）。
+        self.allow_single_div = allow_single_div
+        self._buf = b""
+        self._pending: dict[tuple, dict[int, bytes]] = {}
+        self._pending_meta: dict[tuple, dict] = {}
+        self._pending_max_groups = 64
+        self._pending_max_bytes = 8 * 1024 * 1024
+        self._pending_ttl = 300.0
+        self._buf_max = 64 * 1024
+        self.errors: list[str] = []
+        self.dropped_frames = 0
+
+    def _record_error(self, message: str) -> None:
+        self.dropped_frames += 1
+        if len(self.errors) >= 100:
+            self.errors.pop(0)
+        self.errors.append(message)
+
+    def feed(self, data: bytes) -> list[DecodedMessage]:
+        """流式输入 SL427 字节，返回本次可完整解析的报文。
+
+        DIV=1 的分帧报文仅对 B0/B1/84 重组；C0/81/82/FF、83/61 走安全降级。
+        坏帧/超限缓存写入 ``errors``，``dropped_frames`` 计数。
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError(f"feed() 需要 bytes，实际 {type(data).__name__}")
+        self._buf += bytes(data)
+        out: list[DecodedMessage] = []
+        while True:
+            frame, consumed = self._extract_frame(self._buf)
+            if consumed:
+                self._buf = self._buf[consumed:]
+            if frame is None:
+                if consumed == 0:
+                    if len(self._buf) > self._buf_max:
+                        self._buf = self._buf[1:]
+                        self._record_error("流式缓冲超过上限，丢弃 1 字节重同步")
+                        continue
+                    break
+                continue
+            try:
+                if len(frame) < 10:
+                    raise DecodeError(f"报文太短: {len(frame)} 字节")
+                if crc8(frame[3:-2]) != frame[-2]:
+                    raise DecodeError("CRC8 校验失败")
+                ctrl = C.parse_ctrl(frame[3])
+                if ctrl["div"] == 1:
+                    if len(frame) < 11:
+                        self._record_error(f"分帧帧长不足（{len(frame)}B），安全丢弃")
+                        continue
+                    afn = frame[10]
+                    if afn in (0x61, 0x83):
+                        # §6.3.3.2b 的 L×1K 语义未证，83/61 分帧一律安全丢弃
+                        self._record_error(
+                            f"AFN=0x{afn:02X} 图片分帧的 L×1K 语义未确认，安全丢弃")
+                        continue
+                    out.extend(self._handle_div_frame(frame, ctrl))
+                else:
+                    out.append(self.decode(frame))
+            except DecodeError as e:
+                self._record_error(f"丢弃 {len(frame)}B 无法解析帧: {e}")
+                continue
+        self._evict_pending()
+        return out
+
+    def reset(self) -> None:
+        self._buf = b""
+        self._pending.clear()
+        self._pending_meta.clear()
+        self.errors.clear()
+        self.dropped_frames = 0
+
+    def _extract_frame(self, buf: bytes) -> tuple[bytes | None, int]:
+        """从缓冲提取一个 68 L 68 … CS 16 帧。"""
+        n = len(buf)
+        if n < 3:
+            return None, 0
+        i = 0
+        while i + 2 < n:
+            if buf[i] == C.START_BYTE and buf[i + 2] == C.START_BYTE:
+                break
+            i += 1
+        else:
+            return None, n
+        if i > 0:
+            return None, i
+        if n < 3:
+            return None, 0
+        L = buf[1]
+        if not 1 <= L <= 255:
+            return None, 1
+        total = L + 5
+        if total > self._buf_max:
+            return None, 1
+        if n < total:
+            # 谎报长度可能永久阻塞；若后方已有完整合法帧，跳到该帧重同步
+            nxt = self._find_valid_start(buf, 1)
+            if nxt is not None:
+                return None, nxt
+            return None, 0
+        if buf[total - 1] != C.END_BYTE:
+            nxt = self._find_valid_start(buf, 1)
+            return None, (nxt if nxt is not None else 1)
+        return buf[:total], total
+
+    def _find_valid_start(self, buf: bytes, start: int) -> int | None:
+        """寻找后方一个完整合法帧的起始位置（用于谎报长度重同步）。"""
+        n = len(buf)
+        for i in range(max(1, start), n - 5):
+            if buf[i] != C.START_BYTE or buf[i + 2] != C.START_BYTE:
+                continue
+            L = buf[i + 1]
+            total = L + 5
+            if total >= 6 and i + total <= n and buf[i + total - 1] == C.END_BYTE:
+                return i
+        return None
+
+    def _handle_div_frame(self, frame: bytes, ctrl: dict) -> list[DecodedMessage]:
+        """缓存/组装 DIV=1 分帧；仅无 AUX 的 B0/B1/84 进入重组。"""
+        divs = frame[4]
+        afn = frame[10]
+        if afn not in self._DIV_REASSEMBLE_AFNS:
+            # C0/81/82/FF、83/61：安全降级，绝不把分片当完整报文
+            return [self.decode(frame)]
+
+        key = (ctrl["dir"], bytes(frame[5:10]), afn, ctrl["func_code"])
+        now = time.monotonic()
+        meta = self._pending_meta.get(key)
+        if meta is not None and (now - meta["updated"] > self._pending_ttl):
+            self._pending.pop(key, None)
+            self._pending_meta.pop(key, None)
+            meta = None
+        if meta is None:
+            meta = {"created": now, "updated": now, "warnings": []}
+            self._pending_meta[key] = meta
+        else:
+            meta["updated"] = now
+        group = self._pending.setdefault(key, {})
+
+        if divs in group and group[divs] != frame:
+            group.clear()
+            meta["warnings"].append(f"DIVS={divs} 内容变化，重置该分帧组")
+        group[divs] = frame
+
+        # DIVS=1 可能先到（乱序），因此每次加入分片后都检查是否已可组装
+        if 1 not in group:
+            return []
+
+        complete = all(i in group for i in range(1, max(group) + 1))
+        if not complete:
+            # 等待缺号分片；TTL/上限负责清理
+            return []
+
+        max_div = max(group)
+        if max_div == 1 and not self.allow_single_div:
+            return []  # 保留待确认；避免把多帧末片误当单帧
+        frames = [group[i] for i in range(max_div, 0, -1)]
+        group_warnings = list(meta["warnings"])
+        del self._pending[key]
+        del self._pending_meta[key]
+        synthetic = self._synthesize(frames)
+        msg = self.decode(synthetic)
+        msg.reassembled = True
+        msg.packet_count = len(frames)
+        msg.warnings.append(
+            "多帧重组完成（协议无报文标识，存在跨报文混组残余风险）")
+        msg.warnings.extend(group_warnings)
+        return [msg]
+
+    @staticmethod
+    def _synthesize(frames: list[bytes]) -> bytes:
+        """把按 DIVS 降序排列的分帧合成为 DIV=0 的单帧。"""
+        first = frames[0]
+        ctrl = first[3] & ~0x40  # 清除 DIV 位
+        addr = first[5:10]
+        afn = first[10]
+        payload = b"".join(f[11:-2] for f in frames)
+        user = bytes([ctrl]) + addr + bytes([afn]) + payload
+        if len(user) > 255:
+            raise DecodeError(f"重组用户区超范围(L≤255): {len(user)}")
+        return (bytes([C.START_BYTE, len(user), C.START_BYTE])
+                + user + bytes([crc8(user), C.END_BYTE]))
+
+    def _evict_pending(self) -> None:
+        now = time.monotonic()
+        for key, meta in list(self._pending_meta.items()):
+            if now - meta["updated"] > self._pending_ttl:
+                self._pending.pop(key, None)
+                self._pending_meta.pop(key, None)
+                self._record_error("分帧组超时淘汰")
+
+        def total_bytes() -> int:
+            return sum(sum(len(v) for v in g.values()) for g in self._pending.values())
+
+        while self._pending and (
+            len(self._pending) > self._pending_max_groups
+            or total_bytes() > self._pending_max_bytes
+        ):
+            oldest = min(self._pending_meta,
+                         key=lambda k: (self._pending_meta[k]["created"],
+                                        self._pending_meta[k]["updated"]))
+            self._pending.pop(oldest, None)
+            self._pending_meta.pop(oldest, None)
+            self._record_error("分帧缓存超过组数/字节上限，淘汰最旧组")
+
     def decode_hex(self, hex_str: str) -> DecodedMessage:
         cleaned = "".join(hex_str.split())
         if not cleaned:
@@ -839,12 +1074,21 @@ class SL427Decoder:
 
         data_field = bytes(bytes_list[offset: cs_pos])
         addr_display = _format_addr(addr_bytes)
+        divs = bytes_list[4] if ctrl["div"] == 1 else None
 
-        self._warnings = []
-        elements, special_info = self._parse_data_field(
-            afn, ctrl, data_field
-        )
-        warnings = self._warnings
+        warnings: list[str] = []
+        if ctrl["div"] == 1:
+            # 单帧 decode() 无法知道其余分片；绝不能把分片当完整报文解析。
+            warnings.append(
+                f"分帧报文（DIV=1, DIVS=0x{divs:02X}）需多帧重组；"
+                "单帧解码不解析数据域，请使用 feed() 或提供完整分片"
+            )
+            elements: list[ElementValue] = []
+            special_info = None
+        else:
+            elements, special_info = self._parse_data_field(
+                afn, ctrl, data_field, warnings
+            )
 
         byte_map = _build_byte_map(bytes_list)
 
@@ -867,9 +1111,46 @@ class SL427Decoder:
             warnings=warnings,
         )
 
+    @staticmethod
+    def _raw_param_element(name: str, data: bytes) -> ElementValue:
+        return ElementValue(
+            name=name, value=bytes_to_hex_compact(data) or "-",
+            unit="", raw=bytes_to_hex_compact(data), editable=False,
+        )
+
+    def _parse_0d_payload(
+        self, afn_hex: str, real_data: bytes,
+        elements: list[ElementValue], warnings: list[str],
+    ) -> None:
+        """0x0D 上下文分派（表24 D12 / §7.3.22 n)）。
+
+        - B0/C0/82：D=2B 电压；D=0 时无参数；其他长度写原始摘要 + warning。
+        - 81：0x0D 无中间参数；D 非空写原始摘要 + warning。
+        """
+        if not real_data:
+            return
+        if afn_hex in ("b0", "c0", "82"):
+            if len(real_data) == 2:
+                elements.extend(_parse_ctrl_func_data(0x0D, real_data))
+            else:
+                warnings.append(
+                    f"AFN={afn_hex.upper()}H func=0x0D 的 D 为 {len(real_data)} 字节"
+                    "（应为 2B 电压），已降级为原始摘要"
+                )
+                elements.append(self._raw_param_element("0x0D 参数原始数据", real_data))
+        else:  # 81
+            warnings.append(
+                f"AFN={afn_hex.upper()}H func=0x0D 不应携带中间参数，"
+                f"收到 {len(real_data)} 字节，已降级为原始摘要"
+            )
+            elements.append(self._raw_param_element("0x0D 参数原始数据", real_data))
+
     def _parse_data_field(
-        self, afn: int, ctrl: dict, data_field: bytes
+        self, afn: int, ctrl: dict, data_field: bytes,
+        warnings: list[str] | None = None,
     ) -> tuple[list[ElementValue], dict | None]:
+        if warnings is None:
+            warnings = []
         elements = []
         special_info = None
         is_downlink = not ctrl["dir"]
@@ -906,7 +1187,9 @@ class SL427Decoder:
                 state_bytes = data_field[-C.TP_LEN - 2:-C.TP_LEN]
                 alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                 real_data = data_field[:-C.TP_LEN - 4]
-                if len(real_data) > 0:
+                if func_code == 0x0D:
+                    self._parse_0d_payload("c0", real_data, elements, warnings)
+                elif len(real_data) > 0:
                     if func_code == 0x0E:
                         elements.extend(_parse_statistical_rainfall(real_data))
                     else:
@@ -921,12 +1204,18 @@ class SL427Decoder:
                 ))
             else:
                 # 数据域不足 D+alarm+state+Tp，降级按功能码解析现有数据
-                self._warnings.append(
+                warnings.append(
                     f"AFN=C0 数据域仅 {raw_len} 字节（<{C.TP_LEN + 4}），"
                     "缺少 alarm/state/Tp，按现有数据降级解析"
                 )
                 if func_code == 0x0E:
                     elements.extend(_parse_statistical_rainfall(data_field))
+                elif func_code == 0x0D:
+                    if len(data_field) >= 4:
+                        elements.extend(_parse_alarm(data_field[:2]))
+                        elements.extend(_parse_terminal(data_field[2:4]))
+                    elif data_field:
+                        elements.append(self._raw_param_element("0x0D 参数原始数据", data_field))
                 else:
                     elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
@@ -937,16 +1226,18 @@ class SL427Decoder:
                 state_bytes = data_field[-2:]
                 alarm_bytes = data_field[-4:-2]
                 real_data = data_field[:-4]
-                if len(real_data) > 0:
+                if func_code == 0x0D:
+                    self._parse_0d_payload("b0", real_data, elements, warnings)
+                elif len(real_data) > 0:
                     if func_code == 0x0E:
-                        elements.extend(_parse_comprehensive(real_data))
+                        elements.extend(_parse_comprehensive(real_data, warnings))
                     else:
                         elements.extend(_parse_ctrl_func_data(func_code, real_data))
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
             else:
                 if func_code == 0x0E:
-                    elements.extend(_parse_comprehensive(data_field))
+                    elements.extend(_parse_comprehensive(data_field, warnings))
                 else:
                     elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
@@ -970,7 +1261,9 @@ class SL427Decoder:
                     # 82H: 同 C0，alarm(2B) 在 data 之后
                     alarm_bytes = data_field[-C.TP_LEN - 4:-C.TP_LEN - 2]
                     real_data = data_field[:-C.TP_LEN - 4]
-                if len(real_data) > 0:
+                if func_code == 0x0D:
+                    self._parse_0d_payload("c0", real_data, elements, warnings)
+                elif len(real_data) > 0:
                     if func_code == 0x0E:
                         elements.extend(_parse_statistical_rainfall(real_data))
                     else:
@@ -984,12 +1277,18 @@ class SL427Decoder:
                     is_time=True, byte_len=C.TP_LEN,
                 ))
             else:
-                self._warnings.append(
+                warnings.append(
                     f"AFN={afn:02X}H 数据域仅 {raw_len} 字节（<{C.TP_LEN + 4}），"
                     "缺少 alarm/state/Tp，按现有数据降级解析"
                 )
                 if func_code == 0x0E:
                     elements.extend(_parse_statistical_rainfall(data_field))
+                elif func_code == 0x0D:
+                    if len(data_field) >= 4:
+                        elements.extend(_parse_alarm(data_field[:2]))
+                        elements.extend(_parse_terminal(data_field[2:4]))
+                    elif data_field:
+                        elements.append(self._raw_param_element("0x0D 参数原始数据", data_field))
                 else:
                     elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
@@ -999,7 +1298,7 @@ class SL427Decoder:
                 seg = data_field[:2]
                 v = _safe_bcd_le(seg)
                 if v is None:
-                    self._warnings.append("AFN=84H 电压为 0xAA/0xFF 缺测填充，降级显示 '-'")
+                    warnings.append("AFN=84H 电压为 0xAA/0xFF 缺测填充，降级显示 '-'")
                     volt_val = "-"
                 else:
                     volt_val = f"{v / 100:.2f}"
@@ -1009,7 +1308,7 @@ class SL427Decoder:
                     byte_len=2, decimal=2,
                 ))
             else:
-                self._warnings.append(
+                warnings.append(
                     f"AFN=84H 数据域仅 {len(data_field)} 字节，不足 2B 电压，无法解析"
                 )
 
@@ -1032,7 +1331,7 @@ class SL427Decoder:
             else:
                 tp_str = ""
             if func_code == 0x0E:
-                elements.extend(_parse_comprehensive(ff_data))
+                elements.extend(_parse_comprehensive(ff_data, warnings))
             else:
                 elements.extend(_parse_ctrl_func_data(func_code, ff_data))
             if tp_str:

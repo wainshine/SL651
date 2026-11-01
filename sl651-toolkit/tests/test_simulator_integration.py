@@ -174,13 +174,16 @@ def test_rain_total_accum_nonresetting() -> None:
     v1 = _elem(0x26, 0)
     v2 = _elem(0x26, 100)
     assert v2 >= v1 > 0, f"累计值应递增: {v1} -> {v2}"
-    # 跨日：日降水量归零，累计值不归零
-    daily_before = _elem(0x1F, 1439)
-    daily_after = _elem(0x1F, 2880)
-    total_after = _elem(0x26, 2880)
-    assert daily_after < daily_before, "日降水量应跨日归零"
+    # 跨日：0x20 当前日累计归零，0x1F 日降水量保留上一日总量；0x26 不归零
+    current_before = _elem(0x20, 1439)
+    current_after = _elem(0x20, 1440)
+    prev_day = _elem(0x1F, 1440)
+    total_after = _elem(0x26, 1440)
+    assert current_after < current_before, "0x20 当前降水量应跨日归零"
+    assert abs(prev_day - current_before) < 0.11, f"0x1F 日降水量应为上一日累计: {prev_day} != {current_before}"
     assert total_after >= v2, f"累计值跨日不应重置: {v2} -> {total_after}"
-    print(f"    0x26 不归零累计 OK (日:{daily_before}->{daily_after}, 累计:{v1}->{total_after})")
+    print(f"    0x26 不归零累计 OK (当前日:{current_before}->{current_after}, "
+          f"上一日:{prev_day}, 累计:{v1}->{total_after})")
 
 
 def main() -> int:

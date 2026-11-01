@@ -5,15 +5,30 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from sl651.bcd import int_to_bcd_bytes
 from sl651.crc import crc8
+from sl651.errors import EncodeError
 from . import constants as C
 
 
-class EncodeError(Exception):
-    """编码异常。"""
+def _check_number(value: float, name: str = "值") -> None:
+    """数值必须是有限实数（拒绝 bool/str/None/NaN/inf）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EncodeError(f"{name}必须为数值，实际 {type(value).__name__}")
+    if not math.isfinite(value):
+        raise EncodeError(f"{name}必须为有限数值，实际 {value!r}")
+
+
+def _check_int(value: int, name: str, lo: int = 0, hi: int = 0xFFFF) -> int:
+    """整数/范围校验。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise EncodeError(f"{name}必须为整数，实际 {type(value).__name__}")
+    if not lo <= value <= hi:
+        raise EncodeError(f"{name}超范围({lo}~{hi}): {value}")
+    return value
 
 
 def _bcd_byte(val: int) -> int:
@@ -30,17 +45,17 @@ def _bcd_le(value: int, nbytes: int) -> bytes:
         raise EncodeError(f"BCD 值超范围: {value} ({nbytes} 字节): {e}") from e
 
 
-def encode_address(method: int = 1, admin_code: int = 0, stn_id: int = 1, hex_code: str = "") -> bytes:
+def encode_address(method: int = 1, admin_code: int = 110000, stn_id: int = 1, hex_code: str = "") -> bytes:
     """编码地址域 A（5字节）。
 
     Args:
         method: 1=方式1(行政区划+站址), 2=方式2(特征码+编码)
-        admin_code: 6位行政区划码(方式1)
+        admin_code: 6位行政区划码(方式1)，110000~829999（GB/T 2260 省级码 11~82）
         stn_id: 站址编号(方式1, 1~60000)
         hex_code: 8位HEX编码字符串(方式2)
     """
     if method == 2:
-        if len(hex_code) != 8:
+        if not isinstance(hex_code, str) or len(hex_code) != 8:
             raise EncodeError(f"方式2 hex_code 必须为8位，当前: {hex_code!r}")
         result = bytearray([0x00])
         try:
@@ -51,10 +66,13 @@ def encode_address(method: int = 1, admin_code: int = 0, stn_id: int = 1, hex_co
         return bytes(result)
     if method != 1:
         raise EncodeError(f"method 只支持 1/2，当前: {method}")
-    if not 0 <= admin_code <= 999999:
-        raise EncodeError(f"admin_code 超范围(0~999999): {admin_code}")
-    if not 1 <= stn_id <= 60000:
-        raise EncodeError(f"stn_id 超范围(1~60000): {stn_id}")
+    if isinstance(admin_code, bool) or not isinstance(admin_code, int):
+        raise EncodeError(f"admin_code 必须为整数: {admin_code!r}")
+    if not 110000 <= admin_code <= 829999:
+        raise EncodeError(
+            f"admin_code 超范围(110000~829999，6位行政区划码且首字节非00H): {admin_code}")
+    if isinstance(stn_id, bool) or not isinstance(stn_id, int) or not 1 <= stn_id <= 60000:
+        raise EncodeError(f"stn_id 超范围(1~60000): {stn_id!r}")
     # 方式1
     admin_bcd = int_to_bcd_bytes(admin_code, 3)
     stn_bin = stn_id.to_bytes(2, "little")
@@ -69,6 +87,8 @@ def encode_tp(dt: datetime | None = None, delay: int = 0) -> bytes:
     """
     if dt is None:
         dt = datetime.now()
+    if not isinstance(dt, datetime):
+        raise EncodeError(f"dt 必须为 datetime，实际 {type(dt).__name__}")
     if not 2000 <= dt.year <= 2099:
         raise EncodeError(f"Tp 年份超范围(2000~2099): {dt.year}")
     if not 0 <= delay <= 255:
@@ -98,6 +118,7 @@ class SL427Encoder:
         data: bytes = b"",
         tp: bytes | None = None,
         pw: bytes | None = None,
+        divs: int | None = None,
     ) -> bytes:
         """构造完整 SL427 帧。
 
@@ -107,20 +128,35 @@ class SL427Encoder:
             data: 数据域 D
             tp: 时间标签 Tp (7B, None=不含)
             pw: 密码 PW (2B, None=不含)
+            divs: 分帧计数（1~255）；非空时控制域 C 为 2B（C + DIVS），
+                  且 ctrl_word 必须已设置 DIV 位（make_ctrl(..., div=1)）。
         """
-        if not 0 <= afn <= 0xFF:
-            raise EncodeError(f"afn 超范围(0~0xFF): {afn}")
-        if not 0 <= ctrl_word <= 0xFF:
-            raise EncodeError(f"ctrl_word 超范围(0~0xFF): {ctrl_word}")
-        if tp is not None and len(tp) != 7:
-            raise EncodeError(f"tp 必须为 7 字节，当前 {len(tp)} 字节")
-        if pw is not None and len(pw) != 2:
-            raise EncodeError(f"pw 必须为 2 字节，当前 {len(pw)} 字节")
+        if isinstance(afn, bool) or not isinstance(afn, int) or not 0 <= afn <= 0xFF:
+            raise EncodeError(f"afn 超范围(0~0xFF): {afn!r}")
+        if isinstance(ctrl_word, bool) or not isinstance(ctrl_word, int) or not 0 <= ctrl_word <= 0xFF:
+            raise EncodeError(f"ctrl_word 超范围(0~0xFF): {ctrl_word!r}")
+        if not isinstance(data, (bytes, bytearray)):
+            raise EncodeError(f"data 必须为 bytes，实际 {type(data).__name__}")
+        if tp is not None and (not isinstance(tp, (bytes, bytearray)) or len(tp) != 7):
+            raise EncodeError(f"tp 必须为 7 字节，当前 {tp!r}")
+        if pw is not None and (not isinstance(pw, (bytes, bytearray)) or len(pw) != 2):
+            raise EncodeError(f"pw 必须为 2 字节，当前 {pw!r}")
         if len(self.addr_bytes) != 5:
             raise EncodeError(f"addr_bytes 必须为 5 字节，当前 {len(self.addr_bytes)} 字节")
 
+        ctrl_div = (ctrl_word >> 6) & 1
+        if divs is not None:
+            if isinstance(divs, bool) or not isinstance(divs, int) or not 1 <= divs <= 255:
+                raise EncodeError(f"divs 超范围(1~255): {divs!r}")
+            if ctrl_div != 1:
+                raise EncodeError("divs 非空时 ctrl_word 必须带 DIV=1（make_ctrl(..., div=1)）")
+        elif ctrl_div == 1:
+            raise EncodeError("ctrl_word 带 DIV=1 时必须提供 divs（拆分帧计数）")
+
         user = bytearray()
         user.append(ctrl_word)
+        if divs is not None:
+            user.append(divs)
         user.extend(self.addr_bytes)
         user.append(afn)
         user.extend(data)
@@ -141,9 +177,11 @@ class SL427Encoder:
         return bytes(frame)
 
     def build_heartbeat(self, hb_type: int = 0xF2) -> bytes:
-        """链路检测帧 (AFN=02H, 无AUX)。"""
+        """链路检测帧 (AFN=02H, 无AUX)。hb_type 仅支持 0xF0/0xF1/0xF2（HEART_MAP）。"""
+        if hb_type not in C.HEART_MAP:
+            raise EncodeError(f"心跳类型仅支持 {sorted(C.HEART_MAP)}: {hb_type!r}")
         ctrl = C.make_ctrl(dir_=1, func_code=0x00)
-        return self.build_frame(0x02, ctrl, bytes([hb_type & 0xFF]))
+        return self.build_frame(0x02, ctrl, bytes([hb_type]))
 
     def build_self_report_c0(
         self,
@@ -157,6 +195,10 @@ class SL427Encoder:
 
         data + alarm(2B BIN) + state(2B BIN) + Tp(7B)
         """
+        _check_int(alarm, "alarm", 0, 0xFFFF)
+        _check_int(state, "state", 0, 0xFFFF)
+        if not isinstance(data, (bytes, bytearray)):
+            raise EncodeError(f"data 必须为 bytes，实际 {type(data).__name__}")
         payload = bytearray(data)
         payload.extend(alarm.to_bytes(2, "little"))
         payload.extend(state.to_bytes(2, "little"))
@@ -175,6 +217,10 @@ class SL427Encoder:
 
         规范7.3.22：数据域最后4B=报警状态(2B)+终端机状态(2B)。
         """
+        _check_int(alarm, "alarm", 0, 0xFFFF)
+        _check_int(state, "state", 0, 0xFFFF)
+        if not isinstance(data, (bytes, bytearray)):
+            raise EncodeError(f"data 必须为 bytes，实际 {type(data).__name__}")
         payload = bytearray(data)
         payload.extend(alarm.to_bytes(2, "little"))
         payload.extend(state.to_bytes(2, "little"))
@@ -193,6 +239,10 @@ class SL427Encoder:
 
         规范7.5.2：alarm(2B BIN) + data + state(2B BIN) + Tp(7B)
         """
+        _check_int(alarm, "alarm", 0, 0xFFFF)
+        _check_int(state, "state", 0, 0xFFFF)
+        if not isinstance(data, (bytes, bytearray)):
+            raise EncodeError(f"data 必须为 bytes，实际 {type(data).__name__}")
         payload = bytearray()
         payload.extend(alarm.to_bytes(2, "little"))
         payload.extend(data)
@@ -213,6 +263,10 @@ class SL427Encoder:
 
         data + alarm(2B BIN) + state(2B BIN) + Tp(7B)
         """
+        _check_int(alarm, "alarm", 0, 0xFFFF)
+        _check_int(state, "state", 0, 0xFFFF)
+        if not isinstance(data, (bytes, bytearray)):
+            raise EncodeError(f"data 必须为 bytes，实际 {type(data).__name__}")
         payload = bytearray(data)
         payload.extend(alarm.to_bytes(2, "little"))
         payload.extend(state.to_bytes(2, "little"))
@@ -226,11 +280,14 @@ class SL427Encoder:
         规范7.5.5/表B.98：自报帧数据域仅 2B BCD 电压值（低位在前），
         不含 alarm/state，也不含 Tp（Tp 仅出现在 B.99 确认帧）。
         """
+        _check_number(voltage, "电压")
+        if not 0 <= voltage <= 99.99:
+            raise EncodeError(f"电压值超范围(0~99.99V): {voltage}")
         v = int(round(voltage * 100))
         try:
             data = bytes(reversed(int_to_bcd_bytes(v, 2)))
         except ValueError as e:
-            raise EncodeError(f"电压值超范围(0~999.99V): {voltage}") from e
+            raise EncodeError(f"电压值超范围(0~99.99V): {voltage}") from e
         ctrl = C.make_ctrl(dir_=1, func_code=0x0D)
         return self.build_frame(0x84, ctrl, data)
 
@@ -247,10 +304,8 @@ class SL427Encoder:
 
         key1/pw 组成密码 PW（表9）：key1 1位 BCD，pw 3位 BCD。
         """
-        if not 0 <= key1 <= 9:
-            raise EncodeError(f"PW key1 超范围(0~9): {key1}")
-        if not 0 <= pw <= 999:
-            raise EncodeError(f"PW key2 超范围(0~999): {pw}")
+        _check_int(key1, "PW key1", 0, 9)
+        _check_int(pw, "PW key2", 0, 999)
         ctrl = C.make_ctrl(dir_=0, func_code=func_code)
         pw_bytes = C.encode_pw(key1, pw)
         return self.build_frame(afn, ctrl, data, tp=encode_tp(tp), pw=pw_bytes)
@@ -273,6 +328,10 @@ class SL427Encoder:
         """
         if dt is None:
             dt = datetime.now()
+        if not isinstance(dt, datetime):
+            raise EncodeError(f"dt 必须为 datetime，实际 {type(dt).__name__}")
+        if not 2000 <= dt.year <= 2099:
+            raise EncodeError(f"dt 年份超范围(2000~2099): {dt.year}")
         wd = dt.weekday() + 1  # Python weekday: 0=周一
         week_month = ((wd & 0x07) << 5) | (dt.month & 0x1F)
         data = bytes([_bcd_byte(dt.second), _bcd_byte(dt.minute),
@@ -283,10 +342,13 @@ class SL427Encoder:
 
     def build_set_work_mode(self, mode: int, pw: int = 0) -> bytes:
         """设置工作模式 (AFN=12H)。mode: 0=兼容, 1=自报, 2=查询/应答, 3=调试（规约 §7.2.4）。"""
-        return self.build_param_set_frame(0x12, 0x00, bytes([mode & 0xFF]), pw)
+        if isinstance(mode, bool) or not isinstance(mode, int) or mode not in (0, 1, 2, 3):
+            raise EncodeError(f"工作模式仅支持 0/1/2/3: {mode!r}")
+        return self.build_param_set_frame(0x12, 0x00, bytes([mode]), pw)
 
     def build_set_recharge(self, amount: float, pw: int = 0) -> bytes:
         """设置充值量 (AFN=15H)。amount 单位 m³（4B BCD 小端，规约 §7.2.5 表13）。"""
+        _check_number(amount, "充值量")
         v = int(round(amount))
         try:
             data = bytes(reversed(int_to_bcd_bytes(v, 4)))
@@ -308,6 +370,7 @@ class SL427Encoder:
 
     def build_set_recharge_alarm(self, amount_m3: float, pw: int = 0) -> bytes:
         """设置剩余水量报警值 (AFN=16H)。3B 压缩 BCD，0~999999 m³（表14）。"""
+        _check_number(amount_m3, "剩余水量报警值")
         v = int(round(amount_m3))
         if not 0 <= v <= 999999:
             raise EncodeError(f"剩余水量报警值超范围(0~999999 m³): {amount_m3}")
@@ -324,6 +387,9 @@ class SL427Encoder:
         """
         data = bytearray()
         for base, lower, upper in points:
+            _check_number(base, "水位基值")
+            _check_number(lower, "水位下限偏移")
+            _check_number(upper, "水位上限偏移")
             base_v = int(round(abs(base) * 100))
             if base_v > 799999:
                 raise EncodeError(f"水位基值超范围(-7999.99~7999.99): {base}")
@@ -348,6 +414,7 @@ class SL427Encoder:
         data = bytearray()
         for upper, lower in points:
             for val in (upper, lower):
+                _check_number(val, "水压值")
                 v = int(round(val * 100))
                 if not 0 <= v <= 99999999:
                     raise EncodeError(f"水压值超范围(0~999999.99 kPa): {val}")
@@ -367,11 +434,12 @@ class SL427Encoder:
             raise EncodeError(f"AFN 仅支持 19H/1AH: {afn:#x}")
         mask = 0
         for bit, _ in params:
-            if not 0 <= bit <= 39:
+            if isinstance(bit, bool) or not isinstance(bit, int) or not 0 <= bit <= 39:
                 raise EncodeError(f"水质参数位号超范围(0~39): {bit}")
             mask |= 1 << bit
         data = bytearray(mask.to_bytes(5, "little"))
         for _, val in params:
+            _check_number(val, "水质参数值")
             v = int(round(val))
             if not 0 <= v <= 99999999:
                 raise EncodeError(f"水质参数值超范围(0~99999999): {val}")
@@ -384,6 +452,7 @@ class SL427Encoder:
         """设置水量初始值 (AFN=1BH)，每个水表 5B BCD（表19），0~7999999999 m³。"""
         data = bytearray()
         for val in values:
+            _check_number(val, "水量初始值")
             v = int(round(val))
             if not 0 <= v <= 7999999999:
                 raise EncodeError(f"水量初始值超范围(0~7999999999): {val}")
@@ -392,8 +461,7 @@ class SL427Encoder:
 
     def build_set_relay_code_len(self, seconds: int, pw: int = 0) -> bytes:
         """设置转发中继引导码长值 (AFN=1CH)，1B BIN，0~255 s（§7.2.12）。"""
-        if not 0 <= seconds <= 255:
-            raise EncodeError(f"中继引导码长值超范围(0~255 s): {seconds}")
+        _check_int(seconds, "中继引导码长值", 0, 255)
         return self.build_param_set_frame(0x1C, 0x00, bytes([seconds]), pw)
 
     def build_set_relay_addr(self, addr_list: list[bytes], pw: int = 0) -> bytes:
@@ -407,8 +475,7 @@ class SL427Encoder:
 
     def build_set_relay_auto_switch(self, value: int, pw: int = 0) -> bytes:
         """设置中继站工作机自动切换/自报状态 (AFN=1EH)，1B BIN（§7.2.14）。"""
-        if not 0 <= value <= 0xFF:
-            raise EncodeError(f"中继自动切换状态字节超范围(0~0xFF): {value}")
+        _check_int(value, "中继自动切换状态字节", 0, 0xFF)
         return self.build_param_set_frame(0x1E, 0x00, bytes([value]), pw)
 
     def build_set_flow_limits(
@@ -422,6 +489,7 @@ class SL427Encoder:
         """
         data = bytearray()
         for value, unit_hour in points:
+            _check_number(value, "流量上限值")
             if not -999999.999 <= value <= 999999.999:
                 raise EncodeError(f"流量上限值超范围(±999999.999): {value}")
             v = int(round(abs(value) * 1000))

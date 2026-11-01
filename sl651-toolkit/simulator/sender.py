@@ -56,6 +56,11 @@ class MqttxSender(Sender):
         self.password = password
         self.topic_template = topic_template
         self.timeout = timeout
+        if password:
+            logger.warning(
+                "MQTT 密码将通过 mqttx 命令行参数传递，可能出现在进程列表；"
+                "建议使用专用低权限账号或受限 broker"
+            )
 
     def send(self, hex_msg: str, station_addr: str = "") -> bool:
         topic = self.topic_template.format(station_addr=station_addr)
@@ -109,11 +114,13 @@ class TcpSender(Sender):
         port: int = 5001,
         timeout: int = 10,
         reconnect: bool = False,
+        reconnect_delay: float = 1.0,
     ):
         self.host = host
         self.port = port
         self.timeout = timeout
         self.reconnect = reconnect
+        self.reconnect_delay = reconnect_delay
         self._sock: socket.socket | None = None
         self._connected = False
         self._lock = threading.Lock()
@@ -140,19 +147,18 @@ class TcpSender(Sender):
         self._connected = False
 
     def send(self, hex_msg: str, station_addr: str = "") -> bool:
+        # 重连等待不能持有 self._lock：否则多站点共享时链路故障期所有站点串行阻塞。
+        if not self._connected and self.reconnect:
+            time.sleep(max(0.0, float(self.reconnect_delay)))
         with self._lock:
             try:
                 self._ensure_connected()
                 if self._sock is None:
-                    if self.reconnect:
-                        time.sleep(1)
-                        self._ensure_connected()
-                    if self._sock is None:
-                        return False
+                    return False
                 frame = bytes.fromhex(hex_msg)
                 self._sock.sendall(frame)
                 return True
-            except (socket.timeout, ConnectionError, OSError) as e:
+            except (socket.timeout, ConnectionError, OSError, ValueError) as e:
                 logger.warning("TCP 发送失败: %s", e)
                 self._close_sock()
                 return False

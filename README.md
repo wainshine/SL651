@@ -13,7 +13,7 @@ SL651/
 │   ├── tools/              # CLI 工具
 │   ├── web/                # Web 解码界面
 │   ├── docs/               # 需求文档 + 交接文档
-│   ├── tests/              # 41 项自测（+10 项盲区测试）
+│   ├── tests/              # 10 套件（主套件 61 项 + 辅助套件）
 │   └── README.md           # 工具包详细文档
 ├── 行业规范/               # PDF 规范文件（gitignore，不入库）
 └── .gitignore
@@ -28,7 +28,7 @@ pip install -r requirements.txt
 # 解码一条报文
 python tools/decode_cli.py sl651 --hex "7E7E..."
 
-# 跑全部测试（41 项）
+# 跑全部测试（10 套件）
 python tests/test_sl651.py
 ```
 
@@ -38,6 +38,7 @@ python tests/test_sl651.py
 - **交接文档**：`sl651-toolkit/docs/handoff_main.md`
 - **工具包 README**：`sl651-toolkit/README.md`
 - **各模块 README**：`sl651/README.md`、`sl427/README.md`、`simulator/README.md`、`tools/README.md`、`web/README.md`
+- **v1.4.0 修复闭环**：`sl651-toolkit/docs/fix_report_v1.4.0.md`
 
 ## 行业规范
 

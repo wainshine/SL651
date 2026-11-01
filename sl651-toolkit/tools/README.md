@@ -16,7 +16,7 @@
 ### 命令格式
 
 ```bash
-python tools/decode_cli.py {sl651|sl427} [--hex HEX] [--file FILE] [--output {text|json}]
+python tools/decode_cli.py {sl651|sl427} [--hex HEX] [--file FILE] [--output {text|json}] [--show-raw]
 ```
 
 ### 选项
@@ -26,7 +26,10 @@ python tools/decode_cli.py {sl651|sl427} [--hex HEX] [--file FILE] [--output {te
 | `sl651` / `sl427` | 子命令，必选 |
 | `--hex` | 十六进制报文字符串 |
 | `--file`, `-f` | 报文文件（每行一条，`#` 开头为注释） |
+
+> 默认脱敏：中心站址 `**`、遥测站址保留前 2 个 HEX 字符、密码 `****`、原始报文/错误只显示前缀+长度；`--show-raw` 可关闭。
 | `--output`, `-o` | `text`（默认）或 `json` |
+| `--show-raw` | 显示完整原始报文（仅本地调试；默认脱敏） |
 | 无参数 | 从 stdin 读取 |
 
 ### 使用示例

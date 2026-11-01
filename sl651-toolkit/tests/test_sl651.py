@@ -745,7 +745,7 @@ def test_sl427_encoder_validation() -> None:
     try:
         encode_pw(15, 0)
         raise AssertionError("key1 越界未报错")
-    except ValueError:
+    except EncodeError:
         pass
     print("    OK")
 

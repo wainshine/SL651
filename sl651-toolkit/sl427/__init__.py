@@ -10,8 +10,9 @@ from .constants import (
     make_ctrl,
     parse_ctrl,
 )
-from .decoder import DecodeError, DecodedMessage, ElementValue, SL427Decoder, decode, decode_hex
-from .encoder import EncodeError, SL427Encoder, encode_address, encode_tp
+from .decoder import DecodedMessage, ElementValue, SL427Decoder, decode, decode_hex
+from .encoder import SL427Encoder, encode_address, encode_tp
+from sl651.errors import DecodeError, EncodeError, ProtocolError
 
 __all__ = [
     "AFN_MAP",
@@ -28,6 +29,7 @@ __all__ = [
     "ElementValue",
     "DecodeError",
     "EncodeError",
+    "ProtocolError",
     "decode",
     "decode_hex",
     "encode_address",

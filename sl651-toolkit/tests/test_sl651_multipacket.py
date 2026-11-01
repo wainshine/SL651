@@ -179,6 +179,50 @@ def test_single_frame_feed_passthrough() -> None:
     print("    单帧/多帧直通 OK")
 
 
+def test_syn_corrupt_packet_rejected() -> None:
+    """v2.5 M-1: 逐包 CRC 失败不得重组出 crc_ok=True 的报文。"""
+    orig = _orig_frame()
+    b1, b2 = _split(orig)
+    p1 = bytearray(_make_packet(orig, b1, 2, 1, C.ETB))
+    p1[20] ^= 0x01  # 破坏包 1 数据，CRC 必然失配
+    p2 = _make_packet(orig, b2, 2, 2, C.ETX)
+    dec = SL651Decoder()
+    out = dec.feed(bytes(p1))
+    out += dec.feed(p2)
+    assert not out, f"坏 CRC 包不应重组成功: {len(out)} 帧"
+    assert dec.errors and dec.dropped_frames >= 1, "坏包应进入错误通道"
+    print("    误码包被拒 + errors 可见 OK")
+
+
+def test_pending_bounded() -> None:
+    """v2.5 M-3: 大量未完成多包组必须有界。"""
+    dec = SL651Decoder()
+    for i in range(120):
+        enc = SL651Encoder(center_addr=1, station_addr=f"{i:010X}",
+                           password=0, station_type=0x48)
+        orig = enc.build_timing_frame([(0x39, 1.0, 4, 3)])
+        dec.feed(_make_packet(orig, b"X" * 8, 4095, 1, C.ETB))
+    assert len(dec._pending) <= dec._pending_max_groups, len(dec._pending)
+    print(f"    120 个未完成组被限制为 {len(dec._pending)} 组 OK")
+
+
+def test_legacy_ascii_feed_and_garbage_resync() -> None:
+    """v2.5 L-2/L-11: 旧方言 ASCII 可 feed；前导垃圾后同批重扫。"""
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890",
+                       password=0, station_type=0x48)
+    body = enc.build_timing_body([(0x39, 12.345, 4, 3)])
+    legacy = enc.build_frame(0x32, body, ascii_mode=True)
+    dec = SL651Decoder()
+    out = dec.feed(legacy)
+    assert len(out) == 1 and out[0].crc_ok, "旧方言 ASCII 应可流式解析"
+
+    orig = _orig_frame()
+    dec2 = SL651Decoder()
+    out2 = dec2.feed(b"\x00\x11\x22\x33" + orig)
+    assert len(out2) == 1 and out2[0].crc_ok, "同批前导垃圾后应重扫出合法帧"
+    print("    旧方言 ASCII + 前导垃圾重扫 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 多包 SYN/ETB 重组测试")
@@ -190,6 +234,9 @@ def main() -> int:
         ("增量字节喂入", test_reassemble_incremental_bytes),
         ("单帧直通", test_single_frame_feed_passthrough),
         ("ASCII 方向位", test_ascii_reassemble_direction_preserved),
+        ("误码包拒绝", test_syn_corrupt_packet_rejected),
+        ("缓存有界", test_pending_bounded),
+        ("旧方言/垃圾重扫", test_legacy_ascii_feed_and_garbage_resync),
     ]
     for name, fn in tests:
         print(f">>> {name}")

@@ -30,13 +30,40 @@ from sl651.decoder import DecodeError as SL651DecodeError, SL651Decoder
 from sl427.decoder import DecodeError as SL427DecodeError, SL427Decoder
 
 
-def format_sl651(result) -> str:
+def _mask_center(value: str) -> str:
+    """中心站地址仅 2 个 HEX 字符，必须整体遮蔽（原 [:2]+"**" 是假脱敏）。"""
+    return "**"
+
+
+def _mask_station(value: str) -> str:
+    """遥测站地址保留前 1 字节（2 个 HEX 字符），其余遮蔽。"""
+    if not value:
+        return value
+    return value[:2] + "********"
+
+
+def _mask_raw(hex_str: str, show_raw: bool = False, function_code: int | None = None) -> str:
+    """原始报文脱敏：默认只显示前缀/长度/功能码，--show-raw 时原样。"""
+    if show_raw:
+        return hex_str
+    prefix = hex_str[:4].upper() if len(hex_str) >= 4 else hex_str.upper()
+    n = len(hex_str) // 2
+    fc = f"，func=0x{function_code:02X}" if function_code is not None else ""
+    return f"{prefix}…（{n} 字节{fc}，已脱敏）"
+
+
+def _mask_error(msg: str, show_raw: bool = False) -> str:
+    """错误信息不回显完整报文。"""
+    return _mask_raw(msg, show_raw=show_raw)
+
+
+def format_sl651(result, show_raw: bool = False) -> str:
     lines = []
     lines.append("=" * 72)
-    lines.append(f"原始报文: {result.hex_input}")
+    lines.append(f"原始报文: {_mask_raw(result.hex_input, show_raw, result.function_code)}")
     lines.append("-" * 72)
-    lines.append(f"中心站地址    : {result.center_addr[:2]}**")
-    lines.append(f"遥测站地址    : {result.station_addr[:4]}******")
+    lines.append(f"中心站地址    : {_mask_center(result.center_addr)}")
+    lines.append(f"遥测站地址    : {_mask_station(result.station_addr)}")
     lines.append(f"功能码        : 0x{result.function_code:02X} ({result.function_name})")
     lines.append(f"方向          : {result.direction_label}")
     lines.append(f"正文长度      : {result.body_length} 字节")
@@ -68,10 +95,10 @@ def format_sl651(result) -> str:
     return "\n".join(lines)
 
 
-def format_sl427(result) -> str:
+def format_sl427(result, show_raw: bool = False) -> str:
     lines = []
     lines.append("=" * 72)
-    lines.append(f"原始报文: {result.hex_input}")
+    lines.append(f"原始报文: {_mask_raw(result.hex_input, show_raw, result.afn)}")
     lines.append("-" * 72)
     lines.append(f"方向          : {result.direction}")
     lines.append(f"控制功能码    : {result.ctrl_func_name}")
@@ -103,14 +130,17 @@ def format_sl427(result) -> str:
 
 
 def _sanitize_dict(d: dict) -> dict:
-    """JSON 输出脱敏：与 text 输出一致 —— 密码不显示，站址截断。"""
+    """JSON 输出脱敏：与 text 输出一致。"""
     d = dict(d)
     if "password" in d:
         d["password"] = "****"
     if "center_addr" in d and d["center_addr"]:
-        d["center_addr"] = d["center_addr"][:2] + "**"
+        d["center_addr"] = _mask_center(d["center_addr"])
     if "station_addr" in d and d["station_addr"]:
-        d["station_addr"] = d["station_addr"][:4] + "******"
+        d["station_addr"] = _mask_station(d["station_addr"])
+    if "addr" in d and d["addr"]:
+        # SL427 地址域含行政区划/站址，整体保留类型提示即可
+        d["addr"] = d["addr"]
     return d
 
 
@@ -136,6 +166,8 @@ def main() -> int:
         src.add_argument("--hex", help="十六进制报文字符串")
         src.add_argument("--file", "-f", help="从文件读取报文（每行一条）")
         p.add_argument("--output", "-o", choices=["text", "json"], default="text", help="输出格式")
+        p.add_argument("--show-raw", action="store_true", default=False,
+                       help="显示完整原始报文（仅本地调试；默认脱敏）")
 
     args = parser.parse_args()
 
@@ -197,20 +229,21 @@ def main() -> int:
             "success": len(results),
             "failed": len(errors),
             "results": [_sanitize_dict(r.to_dict()) for r in results],
-            "errors": [{"index": idx, "message": msg, "error": err} for idx, msg, err in errors],
+            "errors": [{"index": idx, "message": _mask_error(msg, args.show_raw),
+                        "error": err} for idx, msg, err in errors],
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:
         fmt_fn = format_sl651 if args.protocol == "sl651" else format_sl427
         for r in results:
-            print(fmt_fn(r))
+            print(fmt_fn(r, show_raw=args.show_raw))
             print()
         if errors:
             print("=" * 72)
             print(f"解码失败 ({len(errors)} 条):")
             for idx, msg, err in errors:
                 print(f"  第 {idx} 条: {err}")
-                print(f"    报文: {msg[:80]}{'...' if len(msg) > 80 else ''}")
+                print(f"    报文: {_mask_error(msg, args.show_raw)}")
 
     return 0 if not errors else 2
 

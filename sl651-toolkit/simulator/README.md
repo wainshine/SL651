@@ -13,7 +13,7 @@
 | `water_level_station.py` | 水位站 `WaterLevelStation`：瞬时河道水位(0x39) + 电池电压(0x38) |
 | `rain_station.py` | 雨量站 `RainStation`：日降水/1h雨量/当前降水/累计雨量(0x26，不归零)/电压 |
 | `soil_station.py` | 墒情站 `SoilStation`：10/20/30/40cm含水量 + 电压 |
-| `sender.py` | 发送器：`MqttxSender`（mqttx CLI 子进程）、`TcpSender`（TCP socket 含重连） |
+| `sender.py` | 发送器：`MqttxSender`（mqttx CLI 子进程，密码非空时 warning）、`TcpSender`（TCP socket 含重连；重连等待在锁外） |
 | `engine.py` | 定时循环引擎：`StationRunner`（单站线程）+ `SimulatorEngine`（多站管理） |
 
 ## 核心 API
@@ -50,7 +50,7 @@ mqtt = MqttxSender(
 )
 
 # TCP 直连（含重连）
-tcp = TcpSender(host="192.168.1.100", port=5001, reconnect=True)
+tcp = TcpSender(host="192.168.1.100", port=5001, reconnect=True, reconnect_delay=1.0)
 ```
 
 两者都实现 `Sender` 接口：`send(hex_msg: str, station_addr: str) -> bool`
@@ -84,6 +84,8 @@ engine.start()  # Ctrl+C 停止
 - `sl651/encoder.py` — SL651Encoder 帧构造
 - 外部：`PyYAML>=6.0`（YAML 多站点配置可选）
 - 外部 CLI：`mqttx`（MQTT 模式）
+- 安全提示：MQTT 密码经 `mqttx pub -P` 命令行参数传递，可能出现在本机进程列表；建议使用专用低权限账号/受限 broker。
+- 雨量站 `0x1F` 日降水量取上一日累计，`0x20` 当前降水量取当前日累计（规约 3.1.7/3.1.8）。
 
 ## CLI 使用
 

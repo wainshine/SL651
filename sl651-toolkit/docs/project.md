@@ -1,7 +1,7 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.3.2  
-> 最后更新：2026-09-14  
+> 版本：v1.4.0
+> 最后更新：2026-11-02
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
 ---
@@ -133,7 +133,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 **负数 BCD 编码（规约 6.6.3.3a）**：首字节 `0xFF` 表示负数。
 
-**状态位解码（规约表58）**：`45H` 要素为 12-bit 压缩位掩码（交流电充电/蓄电池电压/水位超限/流量超限/水质超限/流量仪表/水位仪表/终端箱门/存储器/IC卡功能/水泵工作/剩余水量，共 12 位）。
+**状态位解码（规约表58/表60）**：`45H` 要素表58 定义 BIT0~BIT11（交流电充电/蓄电池电压/水位超限/流量超限/水质超限/流量仪表/水位仪表/终端箱门/存储器/IC卡功能/水泵工作/剩余水量），BIT12~31 保留；表60 规定状态数据为 **4 字节 HEX**。实现兼容 2B/4B 数据宽度、取低 12 位，4B 保留位非零时写入 `warnings`。
 
 **F4/F5 数组（规约附录C 表C.1）**：`F4H` 固定 12 字节（12×5min 时段雨量，0.1mm）；`F5H~FCH` 固定 24 字节（12×5min 间隔相对水位，0.01m）。数组长度按规范固定，不采信定义符长度；定义符与规范不符时写入 `DecodedMessage.warnings` 并继续按规范解析。
 
@@ -155,7 +155,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 **输出**: `DecodedMessage` 数据类，含报头信息、要素列表、CRC 信息、逐字节视图、非致命告警 `warnings`（如 F4/F5 定义符与规范不符）。
 
-**流式解析与多包重组**: `feed(bytes) -> list[DecodedMessage]` 支持跨次调用缓冲不完整帧，并按 SYN 帧「包总数/序列号」（表22：3B，高12位总数/低12位序号）重组多包正文（ETB=后续还有包，ETX=最后一包，规约 6.3.2.5）；支持乱序到达与增量喂入。`reset()` 清空状态。
+**流式解析与多包重组**: `feed(bytes) -> list[DecodedMessage]` 支持跨次调用缓冲不完整帧，并按 SYN 帧「包总数/序列号」（表22：3B，高12位总数/低12位序号）重组多包正文（ETB=后续还有包，ETX=最后一包，规约 6.3.2.5）；支持乱序到达、增量喂入与旧双 SOH 方言。逐包校验 CRC；`seq==1`/总包数变化/同 seq 内容变化触发重置；缓存 64 组/8MB/TTL 300s；无法解析的帧写入 `errors` 并计数 `dropped_frames`。`reset()` 清空状态。
 
 ### 2.6 编码器设计
 
@@ -184,7 +184,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 **输入格式**: `elements = [(引导符, 值, 数据字节数, 小数位数), ...]`  
 **负数编码**: 首字节 `0xFF` + BCD(abs(value))  
-**参数校验**: `station_addr` 必须 10 位 hex → 抛 `EncodeError`；BCD 值超限、正文 >4095 字节 → 统一抛 `EncodeError`
+**参数校验**: `station_addr` 必须 10 位 hex → 抛 `EncodeError`；guide/数值（NaN/inf/str）/direction/年份/BCD 超限/正文 >4095 字节 → 统一抛 `EncodeError`。小时报 F4 雨量 0~25.4mm、F5 水位 0~655.34m，`None` 写缺测标记；F5 定义符 0xC0。`build_set_param_body(..., a_pad_guides=...)` 支持 40H~43H 配置帧的 A 补齐 BCD；SL427 `build_frame(..., divs=...)` 支持分帧编码。
 
 ---
 
@@ -240,6 +240,8 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 ### 3.3 控制域 C（规约表4）
 
+> DIV=1 分帧：`SL427Decoder.feed()` 对 B0/B1/84 重组；C0/81/82/FF 与 83/61 安全降级。83/61 的 `L×1K` 语义待真实样本确认前不重组。B0/C0/84 的 0x0D 按 2B 电压解析，81 的 0x0D 无中间参数（表24 D12 / §7.3.22 n)）。
+
 | 数据位 | 定义 | 说明 |
 |--------|------|------|
 | D7 | DIR | 0=下行(中心→终端), 1=上行(终端→中心) |
@@ -263,7 +265,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 | 方法 | 状态 | 说明 |
 |------|------|------|
-| `build_frame(afn, ctrl, data, tp, pw)` | ✅ | 通用帧构造，含 CRC8 |
+| `build_frame(afn, ctrl, data, tp, pw, divs=None)` | ✅ | 通用帧构造，含 CRC8；`divs` 非空时 C 扩为 2B（C+DIVS），DIV 位必须预置 |
 | `build_heartbeat(hb_type)` | ✅ | 链路检测帧 (AFN=02) |
 | `build_self_report_c0(func, data, tp, alarm, state)` | ✅ | 自报实时数据帧 (AFN=C0) |
 | `build_self_report_81(func, data, tp, alarm, state)` | ✅ | 自报告警 (AFN=81) |
@@ -299,6 +301,8 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_param_set_frame(afn, func, data, pw, tp, key1)` | ✅ | 通用参数设置帧模板（PW 校验统一抛 EncodeError） |
 
 **辅助函数**: `make_ctrl()`, `encode_address()`, `encode_tp()`
+
+**参数校验（v1.4.0）**: `encode_address` 方式1 `admin_code` 限 `110000~829999`、`stn_id` 1~60000；`make_ctrl`/`encode_pw`/`build_heartbeat`/`build_set_work_mode`/`build_self_report_84`/`alarm`/`state`/各数值入口统一抛 `EncodeError`（与 SL651 共享 `sl651.errors`）。
 
 ---
 
@@ -432,7 +436,9 @@ python web/app.py
 | `test_sl427_param_afn.py` | SL427 参数设置 AFN 16H~20H 数据域布局 + 13 项超限校验 + 10H 地址长度/A2H 信道地址长度校验（v1.3.1 M-4） |
 | `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 + 0xAA/0xFF 缺测填充容错（v1.3.1 M-2） |
 | `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 + 0xAA 填充容错（v1.3.1 M-2） |
-| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通、ASCII 方向位保留（v1.3.1 L-2） |
+| `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通、ASCII 方向位保留、逐包 CRC 拒绝、缓存上限、旧方言/重同步（v1.4.0） |
+| `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`（v1.4.0） |
+| `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏（v1.4.0） |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -536,6 +542,13 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 审计 v2.3 L 级修复 | L-1 5CH 名称 / L-2 ASCII 方向位 / L-3 死键 / L-4 0x26 量程注释 / L-5 示例注释 / L-6 文档计数 |
 | 测试增强 | 主套件 57 → 59 项；辅助套件补 0xAA 填充容错、地址长度校验、ASCII 方向位 |
 
+### ✅ 已完成（v1.4.0）
+
+| 任务 | 说明 |
+|------|------|
+| 审计 v2.5/v2.6/补充修复 | SL651 SYN 逐包 CRC/缓存上限/错误通道；SL427 DIV 分帧；综合参数/填充/0x0D/45H；编码器契约；CLI 脱敏；TcpSender/YAML/雨量站 |
+| 测试增强 | 8 → 10 套件（新增 SL427 分帧 8 组、协议契约 12 组；多包套件 +3 组） |
+
 ### ⬜ 远期（P4）
 
 | 任务 | 说明 |
@@ -544,5 +557,5 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | SL651 41H/42H/43H 参数标识符细化 | 当前按附录D 引导符列表构造，具体参数定义未全量收录 |
 | SL427 下行参数/查询帧解码 | 下行帧当前仅显示「下行报文」摘要，未回显命令数据域 |
 | 模拟器 MQTT broker 联调 | 已覆盖内存/TCP 全链路；MQTT 需 mqttx CLI 环境 |
-| ~~45H 状态位 32 位全量~~ | **不存在**：规约表58 仅定义 BIT0~BIT11，BIT12~31 为保留，当前 12 位实现与规约一致 |
+| 45H 状态位保留位 | 表58 定义 BIT0~11，表60 数据为 4B；v1.4.0 已按 4B/12 有效位实现，保留位非零写 `warnings` |
 | ~~SL427 ASCII 编码帧~~ | **不存在**：SL427-2021 全文无 ASCII/字符编码，帧结构固定为 68H…16H 二进制 |
