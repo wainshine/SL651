@@ -973,28 +973,50 @@ class SL427Decoder:
         group_warnings = list(meta["warnings"])
         del self._pending[key]
         del self._pending_meta[key]
-        synthetic = self._synthesize(frames)
-        msg = self.decode(synthetic)
-        msg.reassembled = True
-        msg.packet_count = len(frames)
-        msg.warnings.append(
-            "多帧重组完成（协议无报文标识，存在跨报文混组残余风险）")
-        msg.warnings.extend(group_warnings)
-        return [msg]
+        return [self._decode_div_reassembled(frames, ctrl, group_warnings)]
 
-    @staticmethod
-    def _synthesize(frames: list[bytes]) -> bytes:
-        """把按 DIVS 降序排列的分帧合成为 DIV=0 的单帧。"""
+    def _decode_div_reassembled(
+        self, frames: list[bytes], ctrl: dict, group_warnings: list[str]
+    ) -> DecodedMessage:
+        """直接把分片 D 送进解析管线，不再合成受 255B 限制的单帧。"""
         first = frames[0]
-        ctrl = first[3] & ~0x40  # 清除 DIV 位
-        addr = first[5:10]
+        addr_bytes = first[5:10]
         afn = first[10]
         payload = b"".join(f[11:-2] for f in frames)
-        user = bytes([ctrl]) + addr + bytes([afn]) + payload
-        if len(user) > 255:
-            raise DecodeError(f"重组用户区超范围(L≤255): {len(user)}")
-        return (bytes([C.START_BYTE, len(user), C.START_BYTE])
-                + user + bytes([crc8(user), C.END_BYTE]))
+        logical_ctrl = dict(ctrl)
+        logical_ctrl["div"] = 0
+        warnings: list[str] = []
+        elements, special_info = self._parse_data_field(
+            afn, logical_ctrl, payload, warnings)
+        warnings.insert(
+            0,
+            f"多帧重组（{len(frames)} 片），各分片 CRC 已逐片校验；"
+            "协议无报文标识，存在跨报文混组残余风险",
+        )
+        warnings.extend(group_warnings)
+        direction = "上行（遥测站→中心站）" if logical_ctrl["dir"] else "下行（中心站→遥测站）"
+        return DecodedMessage(
+            hex_input="".join(bytes_to_hex_compact(f) for f in frames),
+            direction=direction,
+            ctrl_info=logical_ctrl,
+            ctrl_func_name=C.CTRL_FUNC_MAP.get(
+                logical_ctrl["func_code"], {}).get(
+                    "name", f"未知(0x{logical_ctrl['func_code']:02X})"),
+            addr_display=_format_addr(addr_bytes),
+            afn=afn,
+            afn_name=C.AFN_MAP.get(afn, f"未知(0x{afn:02X})"),
+            data_len=len(payload),
+            crc_calc=0,
+            crc_recv=0,
+            crc_ok=True,
+            elements=elements,
+            special_info=special_info,
+            byte_map="",
+            frame_length=sum(len(f) for f in frames),
+            reassembled=True,
+            packet_count=len(frames),
+            warnings=warnings,
+        )
 
     def _evict_pending(self) -> None:
         now = time.monotonic()
@@ -1307,8 +1329,54 @@ class SL427Decoder:
                 else:
                     elements.extend(_parse_ctrl_func_data(func_code, data_field))
 
+        elif afn_hex == "b1":
+            # 查询固态存储数据响应：前9B = 参数种类/编号 + 起止时间（表48），
+            # 后续数据按控制域 func_code 分派 7.3.22 参数格式。
+            if len(data_field) < 9:
+                warnings.append(
+                    f"AFN=B1H 数据域仅 {len(data_field)} 字节（<9），无法解析表48头")
+                elements.append(self._raw_param_element("B1 原始数据", data_field))
+            else:
+                param = data_field[0]
+                elements.append(ElementValue(
+                    name="参数种类/编号",
+                    value=f"0x{param:02X}（类别={(param >> 4) & 0x0F}, 编号={param & 0x0F}）",
+                    unit="", raw=f"{param:02X}", editable=False,
+                ))
+                for label, seg in (("开始时间", data_field[1:5]),
+                                   ("结束时间", data_field[5:9])):
+                    hour = safe_bcd_to_int(seg[0])
+                    day = safe_bcd_to_int(seg[1])
+                    month = safe_bcd_to_int(seg[2])
+                    year = safe_bcd_to_int(seg[3])
+                    if None in (hour, day, month, year):
+                        text = "-"
+                    else:
+                        text = f"20{year:02d}-{month:02d}-{day:02d} {hour:02d}:00"
+                    elements.append(ElementValue(
+                        name=label, value=text, unit="",
+                        raw=bytes_to_hex_compact(seg), editable=False, is_time=True,
+                    ))
+                rest = data_field[9:]
+                if rest:
+                    parsed = (_parse_statistical_rainfall(rest)
+                              if func_code == 0x0E
+                              else _parse_ctrl_func_data(func_code, rest))
+                    if parsed:
+                        elements.extend(parsed)
+                    else:
+                        warnings.append(
+                            f"AFN=B1H func=0x{func_code:02X} 的存储数据无法按 7.3.22 解析，"
+                            "降级为原始摘要")
+                        elements.append(self._raw_param_element("B1 存储数据", rest))
+                else:
+                    warnings.append("AFN=B1H 仅含表48头，无存储数据")
+
         elif afn_hex == "84":
             # 自报电压: 规范表B.98 自报帧数据域仅 2B BCD 电压（低位在前），无 alarm/state/Tp
+            if len(data_field) > 2:
+                warnings.append(
+                    f"AFN=84H 数据域 {len(data_field)} 字节（>2B），仅解析前 2B 电压")
             if len(data_field) >= 2:
                 seg = data_field[:2]
                 v = _safe_bcd_le(seg)

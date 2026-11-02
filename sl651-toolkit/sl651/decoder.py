@@ -287,9 +287,10 @@ class SL651Decoder:
         self._pending_max_groups = 64
         self._pending_max_bytes = 8 * 1024 * 1024
         self._pending_ttl = 300.0
-        self._buf_max = 64 * 1024
+        self._buf_max = 256 * 1024
+        # STX 帧 12 位长度；上/下行 SYN 分别 16 位/12 位；ASCII 12 位
         self._max_frame_bytes = max(
-            C.BODY_OFFSET + 4095 + 3,
+            C.BODY_OFFSET + 65535 + 3,
             C.ASCII_BODY_OFFSET + 4095 + 1 + C.ASCII_CRC_LEN,
         )
         # 错误通道：feed() 无法解析/丢弃的帧可观测（不改变返回值）
@@ -390,9 +391,14 @@ class SL651Decoder:
             body_len = ((buf[11] & 0x0F) << 8) | buf[12]
             total = C.BODY_OFFSET + body_len + 3
         elif not is_ascii:
-            if n < C.BODY_OFFSET:
+            if n < C.STX_OFFSET + 1:
                 return None, 0
-            body_len = ((buf[11] & 0x0F) << 8) | buf[12]
+            if buf[C.STX_OFFSET] == C.SYN and not (buf[11] & 0x80):
+                # 表22：上行 SYN 为 16 位纯长度
+                body_len = (buf[11] << 8) | buf[12]
+            else:
+                # 表23 下行 SYN / STX：方向位 + 12 位长度
+                body_len = ((buf[11] & 0x0F) << 8) | buf[12]
             total = C.BODY_OFFSET + body_len + 3
         else:
             if n < C.ASCII_STX_OFFSET + 1:
@@ -424,9 +430,13 @@ class SL651Decoder:
             is_legacy = (buf[i] == C.SOH and i + 1 < n
                          and buf[i + 1] == C.SOH)
             if is_bin or is_legacy:
-                if i + C.STX_OFFSET > n:
+                if i + C.STX_OFFSET >= n:
                     continue
-                body_len = ((buf[i + 11] & 0x0F) << 8) | buf[i + 12]
+                if (not is_legacy and buf[i + C.STX_OFFSET] == C.SYN
+                        and not (buf[i + 11] & 0x80)):
+                    body_len = (buf[i + 11] << 8) | buf[i + 12]
+                else:
+                    body_len = ((buf[i + 11] & 0x0F) << 8) | buf[i + 12]
                 total = C.BODY_OFFSET + body_len + 3
                 if i + total <= n and buf[i + total - 3] in (
                     C.ETX, C.ETB, C.EOT, C.ENQ, C.ACK, C.NAK, C.ESC):
@@ -470,8 +480,14 @@ class SL651Decoder:
             station = frame[3:8]
             pwd = frame[8:10]
             func = frame[10]
-            direction = (frame[11] >> 7) & 1
-            body_len = ((frame[11] & 0x0F) << 8) | frame[12]
+            if frame[11] & 0x80:
+                # 表23 下行 SYN：方向位 + 12 位长度
+                direction = 1
+                body_len = ((frame[11] & 0x0F) << 8) | frame[12]
+            else:
+                # 表22 上行 SYN：16 位纯长度
+                direction = 0
+                body_len = (frame[11] << 8) | frame[12]
             etx = C.BODY_OFFSET + body_len
             pkt = frame[C.BODY_OFFSET:C.BODY_OFFSET + 3]
             total = (pkt[0] << 4) | (pkt[1] >> 4)
@@ -493,8 +509,11 @@ class SL651Decoder:
             direction = (ident_raw >> 15) & 1
             body_len = (((ident_raw >> 8) & 0x0F) << 8) | (ident_raw & 0xFF)
             etx = C.ASCII_BODY_OFFSET + body_len
-            total = int(pkt[0:3]) if pkt[0:3].isdigit() else 0
-            seq = int(pkt[3:6]) if pkt[3:6].isdigit() else 0
+            try:
+                total = int(pkt[0:3], 16)
+                seq = int(pkt[3:6], 16)
+            except ValueError:
+                raise DecodeError(f"ASCII SYN 包头非 HEX: {pkt!r}")
             body_slice = frame[C.ASCII_STX_OFFSET + 7:etx]
             end_marker = frame[etx]
             try:
@@ -553,17 +572,14 @@ class SL651Decoder:
         if any(i not in buf for i in range(1, total + 1)):
             return []  # 等待其余包
 
-        combined = b"".join(buf[i] for i in range(1, total + 1))
+        packets = [buf[i] for i in range(1, total + 1)]
+        combined = b"".join(packets)
         first = meta["frame"]
         group_warnings = list(meta["warnings"])
         del self._pending[key]
         del self._pending_meta[key]
-        synthetic = self._build_reassembled(first, combined, is_ascii)
-        msg = self.decode(synthetic)
-        msg.reassembled = True
-        msg.packet_count = total
-        if group_warnings:
-            msg.warnings.extend(group_warnings)
+        msg = self._decode_reassembled(
+            first, combined, is_ascii, packets, total, direction, group_warnings)
         return [msg]
 
     def _evict_pending(self) -> None:
@@ -591,29 +607,48 @@ class SL651Decoder:
             self._pending_meta.pop(oldest, None)
             self._record_error("多包缓存超过组数/字节上限，淘汰最旧组")
 
-    @staticmethod
-    def _build_reassembled(first: bytes, combined: bytes, is_ascii: bool) -> bytes:
-        """由首包头部 + 合并正文重建单帧（STX 起始，重算长度与 CRC）。"""
-        body_len = len(combined)
-        if body_len > 4095:
-            raise DecodeError(f"重组正文超范围(>4095): {body_len}")
+    def _decode_reassembled(
+        self, first: bytes, combined: bytes, is_ascii: bool,
+        packets: list[bytes], packet_count: int, direction: int,
+        group_warnings: list[str],
+    ) -> DecodedMessage:
+        """直接把分片集合送进解析管线，不再构造受 12 位长度限制的合成帧。"""
+        packet_hex = "".join(bytes_to_hex_compact(p) for p in packets)
+        frame_len = sum(len(p) for p in packets)
+        note = (
+            f"多包重组（{packet_count} 包），各分包 CRC 已逐包校验；"
+            "协议无报文 ID，存在混组残余风险"
+        )
         if not is_ascii:
-            ident_hi = ((first[11] & 0x80)) | ((body_len >> 8) & 0x0F)
-            ident_lo = body_len & 0xFF
-            hdr = bytearray(first[:C.STX_OFFSET])
-            hdr[11] = ident_hi
-            hdr[12] = ident_lo
-            frame = bytes(hdr) + bytes([C.STX]) + combined + bytes([C.ETX])
-            crc = crc16(frame)
-            return frame + bytes([(crc >> 8) & 0xFF, crc & 0xFF])
-        ident_first = int(bytes(first[19:21]).decode("ascii"), 16)
-        ident_raw = (ident_first & 0x80) | ((body_len >> 8) & 0x0F)
-        ident_lo = body_len & 0xFF
-        hdr = bytearray(first[:19])
-        hdr.extend(f"{ident_raw:02X}{ident_lo:02X}".encode("ascii"))
-        frame = bytes(hdr) + bytes([C.STX]) + combined + bytes([C.ETX])
-        crc = crc16(frame)
-        return frame + f"{crc:04X}".encode("ascii")
+            hdr = bytes(first[:C.STX_OFFSET])
+            pseudo = hdr + bytes([C.STX]) + combined + bytes([C.ETX]) + b"\x00\x00"
+            msg = self._decode_binary(
+                pseudo, list(pseudo), len(pseudo),
+                logical_body_len=len(combined),
+                direction_override=direction,
+                crc_override=(0, 0),
+                hex_input_override=packet_hex,
+                raw_frame_override=b"",
+                frame_length_override=frame_len,
+                extra_warnings=[note],
+            )
+        else:
+            hdr = bytes(first[:C.ASCII_STX_OFFSET + 1])
+            pseudo = hdr + combined + bytes([C.ETX]) + b"0000"
+            msg = self._decode_new_ascii(
+                pseudo, list(pseudo), len(pseudo),
+                logical_body_len=len(combined),
+                crc_override=(0, 0),
+                hex_input_override=packet_hex,
+                raw_frame_override=b"",
+                frame_length_override=frame_len,
+                extra_warnings=[note],
+            )
+        msg.reassembled = True
+        msg.packet_count = packet_count
+        if group_warnings:
+            msg.warnings.extend(group_warnings)
+        return msg
 
     def decode_hex(self, hex_str: str) -> DecodedMessage:
         cleaned = "".join(hex_str.split())
@@ -646,7 +681,15 @@ class SL651Decoder:
 
         return self._decode_binary(frame, bytes_list, total)
 
-    def _decode_new_ascii(self, frame: bytes, bytes_list: list[int], total: int) -> DecodedMessage:
+    def _decode_new_ascii(
+        self, frame: bytes, bytes_list: list[int], total: int,
+        *, logical_body_len: int | None = None,
+        crc_override: tuple[int, int] | None = None,
+        hex_input_override: str | None = None,
+        raw_frame_override: bytes | None = None,
+        frame_length_override: int | None = None,
+        extra_warnings: list[str] | None = None,
+    ) -> DecodedMessage:
         if total < C.ASCII_DATA_OFFSET + 3:
             raise DecodeError(f"ASCII 报文太短: {total} 字节")
 
@@ -664,11 +707,20 @@ class SL651Decoder:
         ident_hi = (ident_raw >> 8) & 0xFF
         ident_lo = ident_raw & 0xFF
         direction = (ident_hi >> 7) & 1
-        body_len = ((ident_hi & 0x0F) << 8) | ident_lo
+        body_len = logical_body_len if logical_body_len is not None else (((ident_hi & 0x0F) << 8) | ident_lo)
 
         stx = frame[C.ASCII_STX_OFFSET]
-        if stx != C.STX:
+        if stx not in (C.STX, C.SYN):
             raise DecodeError(f"ASCII 报文 STX 应为 02H，实际 {stx:02X}H")
+        syn_total = 0
+        syn_seq = 0
+        if stx == C.SYN:
+            try:
+                pkt = frame[C.ASCII_STX_OFFSET + 1:C.ASCII_STX_OFFSET + 7].decode("ascii")
+                syn_total = int(pkt[0:3], 16)
+                syn_seq = int(pkt[3:6], 16)
+            except (ValueError, UnicodeDecodeError):
+                syn_total = 0
 
         serial_hex_str = f"{serial_raw:04X}"
         tx_hex_str = bytes_to_hex_compact(tx_time_bytes)
@@ -681,11 +733,14 @@ class SL651Decoder:
             raise DecodeError(f"ASCII 报文 ETX 应为 03H，实际 {frame[etx_pos]:02X}H")
 
         crc_data = bytes(frame[:etx_pos + 1])
-        calc_crc = crc16(crc_data)
-        try:
-            recv_crc = int(frame[etx_pos + 1:etx_pos + 1 + C.ASCII_CRC_LEN].decode("ascii"), 16)
-        except (ValueError, UnicodeDecodeError) as e:
-            raise DecodeError(f"ASCII 报文 CRC 字段解析失败: {e}") from e
+        if crc_override is not None:
+            recv_crc, calc_crc = crc_override
+        else:
+            calc_crc = crc16(crc_data)
+            try:
+                recv_crc = int(frame[etx_pos + 1:etx_pos + 1 + C.ASCII_CRC_LEN].decode("ascii"), 16)
+            except (ValueError, UnicodeDecodeError) as e:
+                raise DecodeError(f"ASCII 报文 CRC 字段解析失败: {e}") from e
 
         data_bytes = bytes(bytes_list[C.ASCII_DATA_OFFSET:etx_pos])
 
@@ -705,12 +760,20 @@ class SL651Decoder:
         elements = self._parse_ascii_elements(data_bytes)
         obs_hex, obs_display, stn_type_hex, stn_type_name = \
             self._extract_ascii_times(data_bytes)
+        warnings: list[str] = []
+        if syn_total > 1:
+            warnings.append(
+                f"SYN 分包帧（total={syn_total}, seq={syn_seq}），"
+                "请使用 feed() 重组；单帧不解析正文")
+            elements = []
+        if extra_warnings:
+            warnings.extend(extra_warnings)
 
         byte_map = ""
         byte_table = []
 
         return DecodedMessage(
-            hex_input=bytes_to_hex_compact(frame),
+            hex_input=hex_input_override if hex_input_override is not None else bytes_to_hex_compact(frame),
             center_addr=f"{center:02X}",
             station_addr=station_addr,
             password=pwd_hex,
@@ -735,17 +798,39 @@ class SL651Decoder:
             elements=elements,
             byte_map=byte_map,
             byte_table=byte_table,
-            raw_frame=frame,
-            frame_length=total,
+            raw_frame=raw_frame_override if raw_frame_override is not None else frame,
+            frame_length=frame_length_override if frame_length_override is not None else total,
+            warnings=warnings,
         )
 
-    def _decode_binary(self, frame: bytes, bytes_list: list[int], total: int) -> DecodedMessage:
+    def _decode_binary(
+        self, frame: bytes, bytes_list: list[int], total: int,
+        *, logical_body_len: int | None = None,
+        direction_override: int | None = None,
+        crc_override: tuple[int, int] | None = None,
+        hex_input_override: str | None = None,
+        raw_frame_override: bytes | None = None,
+        frame_length_override: int | None = None,
+        extra_warnings: list[str] | None = None,
+    ) -> DecodedMessage:
         is_ascii = frame[0] == C.SOH
+        legacy = len(frame) > 1 and frame[0] == C.SOH and frame[1] == C.SOH
         ident_hi = bytes_list[11]
         ident_lo = bytes_list[12]
-        direction = (ident_hi >> 7) & 1
-        body_len = ((ident_hi & 0x0F) << 8) | ident_lo
         stx = bytes_list[C.STX_OFFSET]
+        if direction_override is not None:
+            direction = direction_override
+        elif stx == C.SYN and not legacy and not (ident_hi & 0x80):
+            # 表22 上行 SYN：16 位纯长度，无方向位
+            direction = 0
+        else:
+            direction = (ident_hi >> 7) & 1
+        if logical_body_len is not None:
+            body_len = logical_body_len
+        elif stx == C.SYN and not legacy and not (ident_hi & 0x80):
+            body_len = (ident_hi << 8) | ident_lo
+        else:
+            body_len = ((ident_hi & 0x0F) << 8) | ident_lo
 
         # 表11(上行): [7E7E][中心站址][遥测站址]; 表12(下行): [7E7E][遥测站址][中心站址]
         if direction == 0:
@@ -761,6 +846,12 @@ class SL651Decoder:
             raise DecodeError(f"报文起始符应为 02H(STX) 或 16H(SYN)，实际 {stx:02X}H")
 
         syn_pad = 3 if stx == C.SYN else 0  # SYN 多包帧: 包总数(1B)+序列号(1B)+包长度(1B)
+        syn_total = 0
+        syn_seq = 0
+        if syn_pad and len(bytes_list) >= C.BODY_OFFSET + 3:
+            pkt = bytes_list[C.BODY_OFFSET:C.BODY_OFFSET + 3]
+            syn_total = (pkt[0] << 4) | (pkt[1] >> 4)
+            syn_seq = ((pkt[1] & 0x0F) << 8) | pkt[2]
         body_start = C.BODY_OFFSET + syn_pad
         serial = bytes_list[body_start: body_start + C.SERIAL_LEN]
         tx_time_bytes = bytes(bytes_list[body_start + C.SERIAL_LEN:
@@ -771,8 +862,11 @@ class SL651Decoder:
             raise DecodeError(f"正文长度 {body_len} 与总长 {total} 不匹配")
 
         crc_data = bytes(bytes_list[:etx_pos + 1])
-        calc_crc = crc16(crc_data)
-        recv_crc = (bytes_list[etx_pos + 1] << 8) | bytes_list[etx_pos + 2]
+        if crc_override is not None:
+            recv_crc, calc_crc = crc_override
+        else:
+            calc_crc = crc16(crc_data)
+            recv_crc = (bytes_list[etx_pos + 1] << 8) | bytes_list[etx_pos + 2]
 
         func_name = C.FUNC_MAP.get(func, f"未知(0x{func:02X})")
         is_uniform = func == 0x31
@@ -828,12 +922,19 @@ class SL651Decoder:
             elements = self._parse_ascii_elements(data_bytes)
         else:
             elements, warnings = self._parse_elements(data_bytes, func)
+        if syn_total > 1:
+            warnings.append(
+                f"SYN 分包帧（total={syn_total}, seq={syn_seq}），"
+                "请使用 feed() 重组；单帧不解析正文")
+            elements = []
+        if extra_warnings:
+            warnings.extend(extra_warnings)
 
         byte_map = _build_byte_map(bytes_list, direction, etx_pos, syn_pad)
         byte_table = _build_byte_table(bytes_list, direction, etx_pos, syn_pad)
 
         return DecodedMessage(
-            hex_input=bytes_to_hex_compact(frame),
+            hex_input=hex_input_override if hex_input_override is not None else bytes_to_hex_compact(frame),
             center_addr=f"{center:02X}",
             station_addr=station_addr,
             password=pwd_hex,
@@ -858,8 +959,8 @@ class SL651Decoder:
             elements=elements,
             byte_map=byte_map,
             byte_table=byte_table,
-            raw_frame=frame,
-            frame_length=total,
+            raw_frame=raw_frame_override if raw_frame_override is not None else frame,
+            frame_length=frame_length_override if frame_length_override is not None else total,
             warnings=warnings,
         )
 
@@ -1051,6 +1152,16 @@ class SL651Decoder:
             return SL651Decoder._parse_f4_array(raw_hex, f_len, f_dec)
         if dt == "F5_ARRAY":
             return SL651Decoder._parse_f5_array(raw_hex, f_len, code, f_dec)
+        if dt == "RAW":
+            preview = raw_hex[:32].upper()
+            if len(raw_hex) > 32:
+                preview += "..."
+            return [ElementValue(
+                code=code.upper(), name=desc,
+                value=f"<{desc} {f_len} 字节: {preview}>", unit="",
+                raw=raw_hex.upper(), data_type="Hex", byte_len=f_len,
+                decimal=f_dec, is_sub=is_cust,
+            )]
         if dt == "Hex":
             if code == "f3":
                 # 图片二进制不做数值化，显示字节数 + hex 预览
@@ -1157,7 +1268,14 @@ class SL651Decoder:
             if i + 2 < len(tokens):
                 stn_type_hex = tokens[i + 2]
                 try:
-                    stn_type = int(stn_type_hex, 16) if len(stn_type_hex) == 2 else -1
+                    if len(stn_type_hex) == 1:
+                        # 规约 6.6.2.3：分类码用 ASCII 字符（如 K=0x4B）
+                        stn_type = ord(stn_type_hex)
+                    elif len(stn_type_hex) == 2:
+                        # 兼容历史/厂商 2 字符 HEX 写法
+                        stn_type = int(stn_type_hex, 16)
+                    else:
+                        stn_type = -1
                 except ValueError:
                     stn_type = -1
                 stn_type_name = C.STATION_TYPE.get(stn_type, "未知")

@@ -207,6 +207,40 @@ def test_pending_cap_and_ttl() -> None:
     print(f"    分帧缓存上限 {len(d._pending)} 组 + TTL 淘汰 OK")
 
 
+def test_large_div_direct_parse() -> None:
+    """D 合计 300B >255：直接解析不再合成超限单帧。"""
+    enc = _enc()
+    payload = b"\x01" * 300
+    f1 = _packet(enc, 0xB0, payload[:150], 2, func_code=0x01)
+    f2 = _packet(enc, 0xB0, payload[150:], 1, func_code=0x01)
+    d = SL427Decoder()
+    out = d.feed(f1) + d.feed(f2)
+    assert len(out) == 1, f"应重组 1 帧, errors={d.errors[:2]}"
+    assert out[0].reassembled and out[0].packet_count == 2
+    assert out[0].data_len == 300, out[0].data_len
+    print("    300B 分片直接解析 OK")
+
+
+def test_b1_solid_storage_parse() -> None:
+    enc = _enc()
+    data = (bytes([0x10]) + bytes.fromhex("12010122") + bytes.fromhex("12010122")
+            + bytes.fromhex("001000"))
+    r = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), data))
+    names = [e.name for e in r.elements]
+    assert "参数种类/编号" in names and "开始时间" in names and "结束时间" in names, names
+    assert any(e.name == "雨量" for e in r.elements), names
+    print("    B1 固态存储头/数据解析 OK")
+
+
+def test_84_overlong_warning() -> None:
+    enc = _enc()
+    r = SL427Decoder().decode(enc.build_frame(0x84, make_ctrl(1, 0x0D),
+                                               bytes.fromhex("3412FF")))
+    assert any(">2B" in w for w in r.warnings), r.warnings
+    assert any(e.name == "电压" and e.value == "12.34" for e in r.elements)
+    print("    84 超长 warning OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL427 分帧重组测试")
@@ -223,6 +257,9 @@ def main() -> int:
         ("手工拼 B0", test_b0_manual_frame),
         ("3 帧乱序", test_b0_out_of_order_three),
         ("缓存上限/TTL", test_pending_cap_and_ttl),
+        ("300B 直接解析", test_large_div_direct_parse),
+        ("B1 解析", test_b1_solid_storage_parse),
+        ("84 超长", test_84_overlong_warning),
     ]
     for name, fn in tests:
         print(f">>> {name}")

@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from sl651 import SL651Decoder, SL651Encoder
 from sl651.bcd import datetime_to_bcd
+from sl651.crc import crc16
 from sl651.errors import DecodeError, EncodeError, ProtocolError
 from sl427 import SL427Decoder, SL427Encoder, encode_address, make_ctrl
 
@@ -304,6 +305,54 @@ def test_false_length_resync() -> None:
     print("    谎报长度重同步 OK")
 
 
+def test_ascii_compliance() -> None:
+    """L-1/L-2：ASCII 分类码用 ASCII 字符；SYN 包号按 HEX 解析。"""
+    enc = SL651Encoder(center_addr=1, station_addr="1234567890",
+                       password=0, station_type=0x4B)
+    frame = enc.build_ascii_frame([("Z", "12.345")])
+    r = SL651Decoder().decode(frame)
+    assert r.station_type == "K" and r.station_type_name == "水库", (
+        r.station_type, r.station_type_name)
+    assert SL651Decoder()._extract_ascii_times(
+        b"ST 1234567890 K TT 2306010100 Z 12.345 ")[3] == "水库"
+
+    def ascii_syn(body: bytes, seq: int, total: int) -> bytes:
+        body_len = 6 + len(body)
+        ident = f"{body_len:04X}".encode()
+        pkt = f"{total:03X}{seq:03X}".encode()
+        f = (b"\x01" + b"01" + b"1234567890" + b"0000" + b"32"
+             + ident + b"\x16" + pkt + body + b"\x03")
+        crc = crc16(f)
+        return f + f"{crc:04X}".encode()
+
+    syn = ascii_syn(b"Z 12.345 ", 1, 10)
+    dec = SL651Decoder()
+    assert dec.feed(syn) == []
+    assert not dec.errors, dec.errors
+    assert len(dec._pending) == 1
+    print("    ASCII 分类码 K + SYN 10 包（HEX）OK")
+
+
+def test_yaml_center_password() -> None:
+    sys.path.insert(0, str(PROJECT_ROOT / "tools"))
+    import simulate_cli
+    assert simulate_cli._validate_center(1) == 1
+    assert simulate_cli._validate_password(0) == 0
+    for bad in ("2", 0, 255, True):
+        try:
+            simulate_cli._validate_center(bad)
+            raise AssertionError(f"center {bad!r} 应拒绝")
+        except ValueError:
+            pass
+    for bad in ("0", -1, 65536, True):
+        try:
+            simulate_cli._validate_password(bad)
+            raise AssertionError(f"password {bad!r} 应拒绝")
+        except ValueError:
+            pass
+    print("    YAML center/password 类型/范围 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("协议契约/边界回归测试")
@@ -321,6 +370,8 @@ def main() -> int:
         ("模拟器配置校验", test_simulator_config_validators),
         ("TcpSender 锁外等待", test_tcp_sender_reconnect_sleep_outside_lock),
         ("谎报长度重同步", test_false_length_resync),
+        ("ASCII 分类码/包号", test_ascii_compliance),
+        ("YAML center/password", test_yaml_center_password),
     ]
     for name, fn in tests:
         print(f">>> {name}")

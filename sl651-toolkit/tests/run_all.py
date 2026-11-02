@@ -25,6 +25,7 @@ SUITES = [
     ("SL651 多包重组 (test_sl651_multipacket.py)", HERE / "test_sl651_multipacket.py"),
     ("SL427 分帧重组 (test_sl427_multiframe.py)", HERE / "test_sl427_multiframe.py"),
     ("协议契约/边界 (test_protocol_contracts.py)", HERE / "test_protocol_contracts.py"),
+    ("表 C.1/G.1 常量基线 (test_constants_spec.py)", HERE / "test_constants_spec.py"),
 ]
 
 

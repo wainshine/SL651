@@ -350,7 +350,7 @@ FUJIAN_BASELINE = [
     (0x33, 4, "39", 28.96, "38", 13.17),
     (0x34, 28, "F4", "0.0", "38", 13.16),
     (0x35, 1, "F2", None, "F2", None),
-    (0x36, 2, "F3", None, "05", 7),
+    (0x36, 0, None, None, None, None),  # 单包 SYN 直解按 v1.4.2 L-3 安全降级
     (0x37, 4, "20", 0.0, "38", 11.43),
     (0x38, 13, "04", 0, "F4", "-"),
     (0x3A, 1, "26", 0.0, "26", 0.0),
@@ -966,19 +966,13 @@ def test_sl651_ascii_reserved_id() -> None:
 def test_sl651_f3_image_display() -> None:
     """v1.2.6 B2: F3 图片要素显示字节摘要而非数值化天文数字"""
     print(">>> SL651 F3 图片显示")
-    # 福建 0x36 图片报真实帧（F3 定义符 0xF3 = 30 字节 JPEG 数据）
-    hex_frame = (
-        "7E7E01100000000600003600F8160040012F7F221205161519F1F1100000000648"
-        "F0F02212051615F3F3FFD8FFE000104A46494600010101009000900000FFDB0043"
-        "00080606070605080707070909080A0C140D0C0B0B0C1912130F141D1A1F1E1D1A"
-        "1C1C20242E2720222C231C1C2837292C30313434341F27393D38323C2E333432FF"
-        "DB0043010909090C0B0C180D0D1832211C21323232323232323232323232323232"
-        "32323232323232323232323232323232323232323232323232323232323232323232"
-        "3232323232FFC00011080015001903012200021101031101FFC4001F0000010501"
-        "0101010100000000000000000102030405060708090A0BFFC400B5100002010303"
-        "17DA107E"
-    )
-    r = SL651Decoder().decode_hex(hex_frame)
+    # 用完整 STX 帧验证 F3 显示；原 0x36 样本是 SYN 分包，单帧直解按 L-3 安全降级。
+    enc = SL651Encoder(center_addr=1, station_addr="1000000006",
+                       password=0, station_type=0x50)
+    body = (bytes([0xF1, 0xF1]) + enc.station_addr_bytes + bytes([0x50, 0xF0, 0xF0])
+            + bytes.fromhex("2212051615") + bytes([0xF3, 0xF0])
+            + bytes(range(30)))
+    r = SL651Decoder().decode(enc.build_frame(0x36, body))
     f3 = [e for e in r.elements if e.code == "F3"]
     assert f3, "应解析出 F3 图片要素"
     v = str(f3[0].value)

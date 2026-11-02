@@ -223,6 +223,51 @@ def test_legacy_ascii_feed_and_garbage_resync() -> None:
     print("    旧方言 ASCII + 前导垃圾重扫 OK")
 
 
+def _large_packet(body: bytes, seq: int, total: int, end: int) -> bytes:
+    """按表22 上行 SYN：16 位纯长度 = 3B 包头 + 正文。"""
+    length = 3 + len(body)
+    header = (bytes([0x01]) + bytes.fromhex("1234567890") + bytes.fromhex("0000")
+              + bytes([0x32]) + length.to_bytes(2, "big") + bytes([C.SYN]))
+    pkt = ((total << 12) | seq).to_bytes(3, "big")
+    frame = bytes([0x7E, 0x7E]) + header + pkt + body + bytes([end])
+    crc = crc16(frame)
+    return frame + bytes([(crc >> 8) & 0xFF, crc & 0xFF])
+
+
+def test_large_syn_single_16bit() -> None:
+    """表22 上行 SYN 16 位长度：单包 5003B 正文不被 12 位截断。"""
+    body = b"A" * 5000
+    frame = _large_packet(body, 1, 1, C.ETX)
+    dec = SL651Decoder()
+    out = dec.feed(frame)
+    assert len(out) == 1, f"应解出 1 帧, errors={dec.errors[:2]}"
+    assert out[0].body_length == 5000, out[0].body_length
+    assert out[0].crc_ok
+    print("    单包 5003B（16 位长度）OK")
+
+
+def test_large_syn_combined_direct_parse() -> None:
+    """合计 5050B 超过 STX 12 位上限，直接解析不再整组丢弃。"""
+    p1 = _large_packet(b"A" * 2525, 1, 2, C.ETB)
+    p2 = _large_packet(b"B" * 2525, 2, 2, C.ETX)
+    dec = SL651Decoder()
+    out = dec.feed(p1 + p2)
+    assert len(out) == 1, f"应重组 1 帧, errors={dec.errors[:2]}"
+    assert out[0].reassembled and out[0].packet_count == 2
+    assert out[0].body_length == 5050, out[0].body_length
+    assert out[0].crc_ok
+    print("    合计 5050B 直接解析 OK")
+
+
+def test_decode_syn_partial_warning() -> None:
+    """L-3：decode() 直解 SYN 分包不得静默输出部分要素。"""
+    p1 = _large_packet(b"A" * 300, 1, 2, C.ETB)
+    r = SL651Decoder().decode(p1)
+    assert r.elements == [], f"不应输出部分要素: {len(r.elements)}"
+    assert any("SYN 分包帧" in w for w in r.warnings), r.warnings
+    print("    decode() SYN 分包空要素 + warning OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("SL651 多包 SYN/ETB 重组测试")
@@ -237,6 +282,9 @@ def main() -> int:
         ("误码包拒绝", test_syn_corrupt_packet_rejected),
         ("缓存有界", test_pending_bounded),
         ("旧方言/垃圾重扫", test_legacy_ascii_feed_and_garbage_resync),
+        ("16 位单包 5003B", test_large_syn_single_16bit),
+        ("5050B 直接解析", test_large_syn_combined_direct_parse),
+        ("decode SYN 部分", test_decode_syn_partial_warning),
     ]
     for name, fn in tests:
         print(f">>> {name}")

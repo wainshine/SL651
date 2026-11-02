@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.4.1
+# SL651 水文规约工具包 v1.4.2
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -14,7 +14,7 @@ sl651-toolkit/
 │   ├── README.md
 │   ├── bcd.py                  # BCD 编解码
 │   ├── crc.py                  # CRC-16/MODBUS + CRC8
-│   ├── constants.py            # 101 要素表、FF/ASCII 子标识符、帧结构常量
+│   ├── constants.py            # 132 键要素表、130 ASCII 字面码、G.1 独立表、帧结构常量
 │   ├── decoder.py              # 解码器（HEX/BCD + ASCII，定义符动态解析）
 │   └── encoder.py              # 编码器（上行 5 类 + 下行 4 类 + ASCII）
 ├── sl427/                      # SL427 协议核心
@@ -45,7 +45,7 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── run_all.py              # 统一测试入口（10 套件）
+│   ├── run_all.py              # 统一测试入口（11 套件）
 │   ├── test_sl651.py           # 主测试 61 项
 │   ├── test_round1_blindspots.py    # 盲区测试 10 项
 │   ├── test_simulator_integration.py # 模拟器端到端集成
@@ -254,13 +254,20 @@ python tests/test_sl651.py            # 61 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 10 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 9 组 + SL427 分帧 11 组 + 协议契约 12 组
+- `run_all.py` 共 11 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 14 组 + 协议契约 14 组 + 表 C.1/G.1 常量 4 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
 
 ## 五、版本历史
+
+- **v1.4.2**：v2.7 审计修复
+  - 表 C.1 全量：`SL651_ELEMENTS` 132 键（58H~75H+FDH+F0~FD），ASCII 130 字面键（修正 NS/SQ/SW/ZT，删 SD/MT），表 G.1 独立；
+  - SL651 SYN 16 位长度（单包 5003B）、分片直接解析（合计 5050B 不再丢弃）、`decode()` SYN 分包安全降级；
+  - SL427 DIV 直接解析（300B 不再 255B 丢弃）、B1 固态存储头/数据、84 超长 warning；
+  - ASCII 分类码 `K`、ASCII SYN 包号 HEX；0x26 N(6,1)；YAML center/password 校验；
+  - 测试 11 套件（新增表 C.1/G.1 常量）。
 
 - **v1.4.1**：验收回修
   - 修正 SL427 81 分支 0x0D 上下文分派（原硬编码 "c0"，81 非空 D 被误判电压；现按 §7.5.2b 降级原始摘要 + warning）
@@ -274,7 +281,7 @@ python tests/test_round1_blindspots.py  # 10 项盲区测试
   - 语义：综合参数定长块/标量填充 `-`/信道 0xFF；0x0D 上下文（B0/C0/84 电压，81 无中间参数）；45H 4B 位宽与保留位 warning
   - 编码器：共享 `EncodeError`/`DecodeError`；guide/NaN/inf/direction/年份/mode/heartbeat/alarm/state 统一校验；小时报 F4/F5 边界；地址方式 1 范围；A 补齐 BCD（仅 40H~43H）；F5 定义符 0xC0
   - CLI：中心站全遮、原始报文/errors 默认脱敏、`--show-raw`；`feed()`/`divs=`/`a_pad_guides=` 新 API
-  - 测试：8 → 10 套件（新增 SL427 分帧、协议契约）
+  - 测试：8 → 11 套件（新增 SL427 分帧、协议契约、表 C.1/G.1 常量）
 
 - **v1.3.2**：审计 v2.4 修复版（2M+5L）
   - M-1: SL427 缺测填充处理补全至**全部分支**——查询响应（状态/事件/水泵/中继/水质/种类/时钟）、控制/配置响应（90/91/92/93/94/95/A0/A1）、AFN=51 时钟，`0xAA`/`0xFF` 统一降级 `-`（原按位图/计数输出误导值）
@@ -295,7 +302,7 @@ python tests/test_round1_blindspots.py  # 10 项盲区测试
   - L-1: `AFN_MAP[0x5C]` 更正为「查询终端机历史日记录」
   - L-2: ASCII 多包重组保留方向位（原恒判上行）
   - L-3: 移除 `SL651_ASCII_ELEMENTS` 死占位键 `DRxnn`（动态识别，102 → 101 项）
-  - L-4: 0x26 累计雨量注释/文档对齐实际量程 `N(5,1)`（99999.9mm）
+  - L-4: 0x26 累计雨量注释/文档对齐实际量程 `N(6,1)`（99999.9mm）
   - L-5: `examples/fujian_messages.txt` 注释同步更正的功能码名称
   - L-6: `handoff_test.md` 历史测试计数标注为快照
   - 测试: 主套件 57 → 59 项（功能码名称一致性 / 人工置数 F2 契约）；辅助套件补 0xAA 填充容错与地址长度校验

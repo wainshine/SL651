@@ -102,6 +102,22 @@ def _validate_function_code(value) -> int:
     return code
 
 
+def _validate_center(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"center 必须为整数: {value!r}")
+    if not 1 <= value <= 254:
+        raise ValueError(f"center 超范围(1~254): {value}")
+    return value
+
+
+def _validate_password(value) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"password 必须为整数: {value!r}")
+    if not 0 <= value <= 0xFFFF:
+        raise ValueError(f"password 超范围(0~65535): {value}")
+    return value
+
+
 def _validate_alert_threshold(value) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"alert_threshold 必须为数值: {value!r}")
@@ -189,8 +205,8 @@ def main() -> int:
         engine = SimulatorEngine(sender)
         engine.add_station(
             station,
-            center_addr=args.center,
-            password=args.pwd,
+            center_addr=_validate_center(args.center),
+            password=_validate_password(args.pwd),
             station_type=station_type,
             interval=args.interval,
             function_code=_validate_function_code(args.function_code),
@@ -274,6 +290,8 @@ def _load_config(config_path: str) -> int:
             _validate_interval(interval)
             function_code = _validate_function_code(sc.get("function_code", 0x32))
             alert_threshold = _validate_alert_threshold(sc.get("alert_threshold", 0.05))
+            center = _validate_center(sc.get("center", 1))
+            password = _validate_password(sc.get("password", 0))
             station = cls(**kwargs)
         except (ValueError, TypeError) as e:
             print(f"stations[{idx}] 配置错误: {e}", file=sys.stderr)
@@ -282,8 +300,8 @@ def _load_config(config_path: str) -> int:
         try:
             engine.add_station(
                 station,
-                center_addr=sc.get("center", 1),
-                password=sc.get("password", 0),
+                center_addr=center,
+                password=password,
                 station_type=station_type,
                 interval=interval,
                 function_code=function_code,

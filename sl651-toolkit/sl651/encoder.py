@@ -542,7 +542,10 @@ class SL651Encoder:
         parts = []
         parts.append("ST")
         parts.append(self.station_addr_hex)
-        parts.append(f"{self.station_type:02X}")
+        if not 0x20 <= self.station_type <= 0x7E:
+            raise EncodeError(
+                f"ASCII 分类码必须为可打印 ASCII 字符(0x20~0x7E): 0x{self.station_type:02X}")
+        parts.append(chr(self.station_type))
         parts.append("TT")
         parts.append(obs_time.strftime("%y%m%d%H%M"))
         for code, val in elements:

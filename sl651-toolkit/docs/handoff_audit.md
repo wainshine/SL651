@@ -75,7 +75,7 @@ Layer 4: 历史缺陷复核    ← 上一轮缺陷是否修复到位，有无引
 |----------|----------|----------|
 | `sl651/constants.py:37` FUNC_MAP | 附录B 表B.1 | 功能码值与描述是否一一对应 |
 | `sl651/constants.py:55` STATION_TYPE | 附录A 表A.1 | 站分类码 HEX 值 |
-| `sl651/constants.py:117` SL651_ELEMENTS | 附录C 表C.1 | 引导符、标识符、数据定义（101 项） |
+| `sl651/constants.py:117` SL651_ELEMENTS | 附录C 表C.1 | 引导符、标识符、数据定义（表 C.1 131 行；当前 132 键含 80H） |
 | `sl651/constants.py:227` SL651_ASCII_ELEMENTS | 附录C ASCⅡ列 | 标识符 ASCⅡ 字符 |
 | `sl651/constants.py:95` parse_def_byte | §6.6.3.2 表26 | 高5位字节数 + 低3位小数位 |
 | `sl651/crc.py:12` crc16 | §6.5.2 表20 | 多项式 X16+X15+X2+1、反射 0xA001、初值 0xFFFF |
