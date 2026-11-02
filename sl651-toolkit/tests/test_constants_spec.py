@@ -92,12 +92,34 @@ def test_fd_raw_decode() -> None:
     print("    FDH 不数值化、显示字节摘要 OK")
 
 
+def test_fixture_c1_full() -> None:
+    """131 行 TSV 基线：guide/ASCII/名称/单位逐行回归（PDF 表 C.1 快照）。"""
+    import csv
+    fixture = Path(__file__).resolve().parent / "fixtures" / "sl651_table_c1.tsv"
+    rows = list(csv.DictReader(fixture.open(encoding="utf-8"), delimiter="\t"))
+    assert len(rows) == 131, len(rows)
+    for row in rows:
+        guide = row["guide"]
+        assert guide in C.SL651_ELEMENTS, f"缺 guide {guide}"
+        name, unit, _ = C.SL651_ELEMENTS[guide]
+        assert (name, unit) == (row["hex_name"], row["hex_unit"]), (guide, name, unit, row)
+        code = row["ascii"]
+        if code == "DRxnn":
+            assert "DRxnn" not in C.SL651_ASCII_ELEMENTS
+            continue
+        assert code in C.SL651_ASCII_ELEMENTS, f"缺 ASCII {code} ({guide})"
+        aname, aunit = C.SL651_ASCII_ELEMENTS[code]
+        assert (aname, aunit) == (row["ascii_name"], row["ascii_unit"]), (code, aname, aunit, row)
+    assert "pH" in C.SL651_ASCII_ELEMENTS and "PH" not in C.SL651_ASCII_ELEMENTS
+    print(f"    {len(rows)} 行 TSV 逐行一致；pH 大小写 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("表 C.1 / 表 G.1 常量基线测试")
     print("=" * 60)
     for fn in (test_hex_table_coverage, test_ascii_c1_table,
-               test_g_table_separate, test_fd_raw_decode):
+               test_fixture_c1_full, test_g_table_separate, test_fd_raw_decode):
         try:
             fn()
         except Exception as e:

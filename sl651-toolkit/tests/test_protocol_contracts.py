@@ -316,6 +316,19 @@ def test_ascii_compliance() -> None:
     assert SL651Decoder()._extract_ascii_times(
         b"ST 1234567890 K TT 2306010100 Z 12.345 ")[3] == "水库"
 
+    # 旧 2 字符 HEX 分类码：仍兼容，但必须留 warning
+    legacy = bytearray(frame)
+    body = bytes(legacy[24:-5])
+    body = body.replace(b" K ", b" 4B ", 1)
+    ident = int(legacy[19:23], 16)
+    new_len = len(body)
+    legacy[19:23] = f"{ident & 0xF000:04X}".encode()
+    legacy[20:23] = f"{new_len:03X}".encode()
+    legacy = legacy[:24] + body + legacy[24 + len(bytes(frame[24:-5])):]
+    legacy = legacy[:-4] + f"{crc16(bytes(legacy[:-4])):04X}".encode()
+    r_legacy = SL651Decoder().decode(bytes(legacy))
+    assert any("2 字符 HEX" in w for w in r_legacy.warnings), r_legacy.warnings
+
     def ascii_syn(body: bytes, seq: int, total: int) -> bytes:
         body_len = 6 + len(body)
         ident = f"{body_len:04X}".encode()

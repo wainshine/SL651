@@ -784,6 +784,18 @@ class SL651Decoder:
                 self._extract_ascii_times(data_bytes)
         if extra_warnings:
             warnings.extend(extra_warnings)
+        if syn_total <= 1 and data_bytes:
+            tokens = data_bytes.decode("ascii", errors="replace").split()
+            if (len(tokens) >= 3 and tokens[0].upper() == "ST"
+                    and len(tokens[2]) == 2):
+                try:
+                    int(tokens[2], 16)
+                except ValueError:
+                    pass
+                else:
+                    warnings.append(
+                        f"ASCII 分类码使用 2 字符 HEX（{tokens[2]}），"
+                        "规约 6.6.2.3 要求 ASCII 字符；已兼容解析")
 
         byte_map = ""
         byte_table = []

@@ -70,16 +70,16 @@
 - 实现 `SL651_ELEMENTS` 与 `test_constants_spec.py` 均按此映射，正确。
 - v2.7 报告早期版本与方案 §2.2 曾误写为「WP3~WP8、单位 m」；当前方案 §2.2 已改为 WP1~WP8/kPa。若历史审计/方案副本仍有旧行，以表 C.1、实现和 fixture/测试为准。
 
-### 2. 与方案的偏差：未落 TSV fixture
+### 2. TSV fixture 已补
 
-- 方案 §2.3 计划 `tests/fixtures/sl651_table_c1.tsv` 131 行逐行 diff；
-- 实际落地为 `tests/test_constants_spec.py` 内的覆盖断言：132 键全集、保留区排除、58H~75H/ASCII 新增行的名称/单位/语义精确断言；
-- 新增部分覆盖是精确的，但 01H~57H 存量行的逐行名称/单位基线未固化。建议后续补 TSV 或等价 fixture。
+- `tests/fixtures/sl651_table_c1.tsv` 已落 131 行（guide/ASCII/名称/单位/备注）；
+- `test_constants_spec.py::test_fixture_c1_full` 逐行比对；`04H DRxnn` 标注为动态模式码；
+- 该 fixture 同时发现并修正了 `pH` 被写成 `PH` 的大小写错码。
 
-### 3. 与方案的偏差：ASCII 旧 2 字符 HEX 分类码未发 warning
+### 3. ASCII 旧 2 字符 HEX 分类码：已补 warning
 
-- 方案 §5.1 曾建议兼容旧 `4B` 时 warning；
-- 实际只兼容、不提示（避免对历史帧产生噪声）。已列为残余，不阻塞。
+- 兼容 `4B` 等旧写法，同时输出 `ASCII 分类码使用 2 字符 HEX…规约要求 ASCII 字符` warning；
+- 新增测试覆盖。
 
 ---
 
@@ -88,7 +88,7 @@
 ```text
 python3 -B tests/run_all.py
   主测试套件 / 盲区 / 模拟器集成 / 变异 / SL427 参数、查询、控制
-  / SL651 多包 12 组 / SL427 分帧 14 组 / 协议契约 15 组 / 表 C.1/G.1 4 组
+  / SL651 多包 12 组 / SL427 分帧 14 组 / 协议契约 15 组 / 表 C.1/G.1 5 组
   → 11/11
 ```
 
@@ -107,5 +107,4 @@ python3 -B tests/run_all.py
 - 表 G.1 当前只落核心 12 码；完整 142 行随 0x35 人工置数解析补齐。
 - 83/61 图片 `L×1K` 仍按 v1.4.1 保守降级（SA-R3 待真实样本）。
 - SL427 B1 后续数据按 `func_code` 标量解析；多记录数组的完整展开可后续增强。
-- ASCII 旧 2 字符 HEX 分类码只兼容、不 warning。
 - 未执行 `git add/commit`；提交由用户完成。

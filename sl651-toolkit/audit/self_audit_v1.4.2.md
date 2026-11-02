@@ -49,9 +49,18 @@ ASCII 正文时间头解析失败: non-hexadecimal number found in fromhex() arg
 
 ---
 
-### SA-4（低）：测试组数/文档计数漂移
+### SA-4（中）：ASCII `pH` 被写成 `PH`
 
-新增测试后实际为：多包 12 组、SL427 分帧 14 组、协议契约 15 组、常量 4 组；README/project/handoff/fix_report 已同步为 11 套件及对应组数。
+**位置**：`sl651/constants.py::SL651_ASCII_ELEMENTS`。
+
+**问题**：表 C.1 的 46H ASCII 标识符是 `pH`（小写 p），实现写成 `PH`。因 ASCII 标识符大小写敏感，按规约 `pH` 编码的帧无法命中该表项。该问题在生成 131 行 TSV 逐行基线时暴露。
+
+**修复**：键改为 `pH`；`test_constants_spec.py` 断言 `pH` 存在、`PH` 不存在；TSV fixture 同步。
+**测试**：131 行 fixture 逐行比对通过。
+
+### SA-5（低）：测试组数/文档计数漂移
+
+新增测试后实际为：多包 12 组、SL427 分帧 14 组、协议契约 15 组、常量 5 组；README/project/handoff/fix_report 已同步为 11 套件及对应组数；并补 131 行 TSV fixture。
 
 ---
 
@@ -69,6 +78,8 @@ ASCII 正文时间头解析失败: non-hexadecimal number found in fromhex() arg
 | 84 超长 | warning + 前 2B 电压 |
 | ASCII 分类码 | 编码 `K`、解码 `K`=水库，兼容 `4B` |
 | ASCII SYN 包号 | `00A001` 10 包按 HEX 入缓存/重组 |
+| ASCII 分类码 `pH` 大小写 | `pH` 命中；`PH` 不存在 |
+| 131 行 TSV fixture | 逐行通过；覆盖旧 2 字符 HEX warning |
 | YAML center/password | 字符串/越界返回可读错误，不裸栈 |
 | 0x26 | N(6,1) 文档一致 |
 
@@ -81,8 +92,7 @@ ASCII 正文时间头解析失败: non-hexadecimal number found in fromhex() arg
 3. **下行 SYN 重组**：当前主要覆盖上行 M3；表23 下行 SYN 的分片重组未构造专项用例。
 4. **重组 `body_length` 语义**：SL651 重组的 `body_length` 为合并后的正文长度（不含 3B SYN 包头），与单帧直解的 `body_length` 存在 3B 差异；已在修复报告记录，未改变字段类型。
 5. **重组 CRC 展示**：`crc_received/calculated` 为 0，`crc_ok=True`，由 warning 说明“各分包 CRC 已逐包校验”。
-6. **ASCII 旧 2 字符 HEX 分类码**：仍兼容但未额外发 warning。
-7. **83/61 图片 `L×1K`**：维持 v1.4.1 保守降级，未纳入本轮。
+6. **83/61 图片 `L×1K`**：维持 v1.4.1 保守降级，未纳入本轮。
 
 ---
 
