@@ -254,7 +254,7 @@ python tests/test_sl651.py            # 61 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 11 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 14 组 + 协议契约 14 组 + 表 C.1/G.1 常量 4 组
+- `run_all.py` 共 11 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 14 组 + 协议契约 15 组 + 表 C.1/G.1 常量 4 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 

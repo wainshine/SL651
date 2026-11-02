@@ -548,7 +548,7 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 任务 | 说明 |
 |------|------|
 | 审计 v2.5/v2.6/补充修复 | SL651 SYN 逐包 CRC/缓存上限/错误通道；SL427 DIV 分帧；综合参数/填充/0x0D/45H；编码器契约；CLI 脱敏；TcpSender/YAML/雨量站 |
-| 测试增强 | 8 → 11 套件（SL427 分帧 14 组、协议契约 14 组、表 C.1/G.1 常量 4 组、多包 12 组） |
+| 测试增强 | 8 → 11 套件（SL427 分帧 14 组、协议契约 15 组、表 C.1/G.1 常量 4 组、多包 12 组） |
 
 ### ⬜ 远期（P4）
 

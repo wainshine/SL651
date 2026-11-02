@@ -1,7 +1,7 @@
 # SL651-Toolkit v1.4.2 修复报告
 
 > 日期：2026-11-03  
-> 基线：v1.4.1，git `44535d6`  
+> 基线：v1.4.1，git `44535d6`；主体修复提交 `13bef9f`
 > 版本：v1.4.2  
 > 依据：`audit/audit_report_v2.7.md` + `audit/audit_review_v2.7.md` + `docs/fix_plan_v1.4.2.md`  
 > 测试：`python3 -B tests/run_all.py` → **11/11**
@@ -50,12 +50,45 @@
 
 ---
 
-## 三、验证
+## 三、自审计追加修复
+
+自审计（`audit/self_audit_v1.4.2.md`）发现并修复 3 个问题：
+
+1. ASCII SYN 重组伪帧未把 SYN 改回 STX，导致时间头偏移 6B（9 包 ASCII 重组失败）；
+2. ASCII SYN 分包在 `decode()` 中被入口“太短”检查提前拒绝，L-3 降级未生效；
+3. L-3 先解析正文再清空，畸形分包可能先抛解析异常；改为 `syn_total>1` 时跳过正文解析。
+
+均已在 `tests/test_protocol_contracts.py::test_ascii_syn_reassembly_and_partial` 等用例覆盖。
+
+---
+
+## 三之二、验收勘误与方案偏差
+
+### 1. 58H~5FH 映射勘误
+
+- 规约表 C.1 / PDF 第 47~48 页：**58H WP1、59H WP2、5AH WP3 … 5FH WP8，水压 1~8，单位 kPa，N(5,2)**。
+- 实现 `SL651_ELEMENTS` 与 `test_constants_spec.py` 均按此映射，正确。
+- v2.7 报告早期版本与方案 §2.2 曾误写为「WP3~WP8、单位 m」；当前方案 §2.2 已改为 WP1~WP8/kPa。若历史审计/方案副本仍有旧行，以表 C.1、实现和 fixture/测试为准。
+
+### 2. 与方案的偏差：未落 TSV fixture
+
+- 方案 §2.3 计划 `tests/fixtures/sl651_table_c1.tsv` 131 行逐行 diff；
+- 实际落地为 `tests/test_constants_spec.py` 内的覆盖断言：132 键全集、保留区排除、58H~75H/ASCII 新增行的名称/单位/语义精确断言；
+- 新增部分覆盖是精确的，但 01H~57H 存量行的逐行名称/单位基线未固化。建议后续补 TSV 或等价 fixture。
+
+### 3. 与方案的偏差：ASCII 旧 2 字符 HEX 分类码未发 warning
+
+- 方案 §5.1 曾建议兼容旧 `4B` 时 warning；
+- 实际只兼容、不提示（避免对历史帧产生噪声）。已列为残余，不阻塞。
+
+---
+
+## 四、验证
 
 ```text
 python3 -B tests/run_all.py
   主测试套件 / 盲区 / 模拟器集成 / 变异 / SL427 参数、查询、控制
-  / SL651 多包 12 组 / SL427 分帧 14 组 / 协议契约 14 组 / 表 C.1/G.1 4 组
+  / SL651 多包 12 组 / SL427 分帧 14 组 / 协议契约 15 组 / 表 C.1/G.1 4 组
   → 11/11
 ```
 
@@ -69,9 +102,10 @@ python3 -B tests/run_all.py
 
 ---
 
-## 四、残余
+## 五、残余
 
 - 表 G.1 当前只落核心 12 码；完整 142 行随 0x35 人工置数解析补齐。
 - 83/61 图片 `L×1K` 仍按 v1.4.1 保守降级（SA-R3 待真实样本）。
 - SL427 B1 后续数据按 `func_code` 标量解析；多记录数组的完整展开可后续增强。
+- ASCII 旧 2 字符 HEX 分类码只兼容、不 warning。
 - 未执行 `git add/commit`；提交由用户完成。

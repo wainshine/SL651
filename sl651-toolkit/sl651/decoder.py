@@ -633,8 +633,9 @@ class SL651Decoder:
                 extra_warnings=[note],
             )
         else:
-            hdr = bytes(first[:C.ASCII_STX_OFFSET + 1])
-            pseudo = hdr + combined + bytes([C.ETX]) + b"0000"
+            hdr = bytearray(first[:C.ASCII_STX_OFFSET + 1])
+            hdr[C.ASCII_STX_OFFSET] = C.STX
+            pseudo = bytes(hdr) + combined + bytes([C.ETX]) + b"0000"
             msg = self._decode_new_ascii(
                 pseudo, list(pseudo), len(pseudo),
                 logical_body_len=len(combined),
@@ -690,7 +691,7 @@ class SL651Decoder:
         frame_length_override: int | None = None,
         extra_warnings: list[str] | None = None,
     ) -> DecodedMessage:
-        if total < C.ASCII_DATA_OFFSET + 3:
+        if total < C.ASCII_STX_OFFSET + 1:
             raise DecodeError(f"ASCII 报文太短: {total} 字节")
 
         try:
@@ -700,8 +701,6 @@ class SL651Decoder:
             password = int(frame[13:17].decode("ascii"), 16)
             func = int(frame[17:19].decode("ascii"), 16)
             ident_raw = int(frame[19:23].decode("ascii"), 16)
-            serial_raw = int(frame[24:28].decode("ascii"), 16)
-            tx_time_bytes = bytes.fromhex(frame[28:40].decode("ascii"))
         except (ValueError, UnicodeDecodeError) as e:
             raise DecodeError(f"ASCII 报文头部解析失败: {e}") from e
         ident_hi = (ident_raw >> 8) & 0xFF
@@ -721,9 +720,22 @@ class SL651Decoder:
                 syn_seq = int(pkt[3:6], 16)
             except (ValueError, UnicodeDecodeError):
                 syn_total = 0
+        syn_pad = C.ASCII_STX_OFFSET + 7 - C.ASCII_BODY_OFFSET if stx == C.SYN else 0
 
-        serial_hex_str = f"{serial_raw:04X}"
-        tx_hex_str = bytes_to_hex_compact(tx_time_bytes)
+        serial_raw = 0
+        tx_time_bytes = b""
+        if syn_total <= 1:
+            try:
+                serial_raw = int(frame[C.ASCII_BODY_OFFSET + syn_pad:
+                                        C.ASCII_BODY_OFFSET + syn_pad + 4].decode("ascii"), 16)
+                tx_time_bytes = bytes.fromhex(
+                    frame[C.ASCII_BODY_OFFSET + syn_pad + 4:
+                          C.ASCII_BODY_OFFSET + syn_pad + 16].decode("ascii"))
+            except (ValueError, UnicodeDecodeError) as e:
+                raise DecodeError(f"ASCII 正文时间头解析失败: {e}") from e
+
+        serial_hex_str = f"{serial_raw:04X}" if syn_total <= 1 else ""
+        tx_hex_str = bytes_to_hex_compact(tx_time_bytes) if syn_total <= 1 else ""
 
         etx_pos = C.ASCII_BODY_OFFSET + body_len
         if etx_pos + C.ASCII_CRC_LEN >= total:
@@ -742,7 +754,8 @@ class SL651Decoder:
             except (ValueError, UnicodeDecodeError) as e:
                 raise DecodeError(f"ASCII 报文 CRC 字段解析失败: {e}") from e
 
-        data_bytes = bytes(bytes_list[C.ASCII_DATA_OFFSET:etx_pos])
+        data_start = C.ASCII_DATA_OFFSET + syn_pad
+        data_bytes = bytes(bytes_list[data_start:etx_pos])
 
         func_name = C.FUNC_MAP.get(func, f"未知(0x{func:02X})")
         is_uniform = func == 0x31
@@ -750,22 +763,25 @@ class SL651Decoder:
         direction_label = "上行（遥测站→中心站）" if direction == 0 else "下行（中心站→遥测站）"
 
         pwd_hex = f"{password:04X}"
-        tx_display = _fmt_bcd_time_sec(tx_hex_str)
+        tx_display = _fmt_bcd_time_sec(tx_hex_str) if tx_hex_str else ""
 
         stn_type_hex = ""
         stn_type_name = ""
         obs_hex = ""
         obs_display = ""
 
-        elements = self._parse_ascii_elements(data_bytes)
-        obs_hex, obs_display, stn_type_hex, stn_type_name = \
-            self._extract_ascii_times(data_bytes)
         warnings: list[str] = []
         if syn_total > 1:
+            # L-3：分包帧不解析正文，避免把截断元素当完整值
+            elements = []
+            obs_hex, obs_display, stn_type_hex, stn_type_name = "", "", "", ""
             warnings.append(
                 f"SYN 分包帧（total={syn_total}, seq={syn_seq}），"
                 "请使用 feed() 重组；单帧不解析正文")
-            elements = []
+        else:
+            elements = self._parse_ascii_elements(data_bytes)
+            obs_hex, obs_display, stn_type_hex, stn_type_name = \
+                self._extract_ascii_times(data_bytes)
         if extra_warnings:
             warnings.extend(extra_warnings)
 
@@ -918,15 +934,16 @@ class SL651Decoder:
 
         warnings: list[str] = []
         data_bytes = bytes(bytes_list[data_start:etx_pos])
-        if is_ascii:
-            elements = self._parse_ascii_elements(data_bytes)
-        else:
-            elements, warnings = self._parse_elements(data_bytes, func)
         if syn_total > 1:
+            # L-3：分包帧不解析正文，避免把截断元素当完整值
+            elements = []
             warnings.append(
                 f"SYN 分包帧（total={syn_total}, seq={syn_seq}），"
                 "请使用 feed() 重组；单帧不解析正文")
-            elements = []
+        elif is_ascii:
+            elements = self._parse_ascii_elements(data_bytes)
+        else:
+            elements, warnings = self._parse_elements(data_bytes, func)
         if extra_warnings:
             warnings.extend(extra_warnings)
 

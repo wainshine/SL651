@@ -353,6 +353,38 @@ def test_yaml_center_password() -> None:
     print("    YAML center/password 类型/范围 OK")
 
 
+def test_ascii_syn_reassembly_and_partial() -> None:
+    """ASCII SYN：分包直解安全降级；完整 9 包可重组出要素。"""
+    def ascii_syn(body: bytes, seq: int, total: int) -> bytes:
+        body_len = 6 + len(body)
+        ident = f"{body_len:04X}".encode()
+        pkt = f"{total:03X}{seq:03X}".encode()
+        f = (b"\x01" + b"01" + b"1234567890" + b"0000" + b"32"
+             + ident + b"\x16" + pkt + body + b"\x03")
+        crc = crc16(f)
+        return f + f"{crc:04X}".encode()
+
+    body = b"0001" + b"230601010000" + b"Z 12.345 "
+    chunks = [body[i:i + 3] for i in range(0, len(body), 3)]
+    packets = [ascii_syn(c, i + 1, len(chunks)) for i, c in enumerate(chunks)]
+
+    partial = SL651Decoder().decode(packets[0])
+    assert partial.elements == []
+    assert any("SYN 分包帧" in w for w in partial.warnings), partial.warnings
+
+    single = SL651Decoder().decode(ascii_syn(body, 1, 1))
+    assert any(e.code == "Z" and abs(float(e.value) - 12.345) < 1e-9
+               for e in single.elements), [(e.code, e.value) for e in single.elements]
+
+    dec = SL651Decoder()
+    out = dec.feed(b"".join(packets))
+    assert len(out) == 1, f"应重组 1 帧: {dec.errors[:2]}"
+    assert out[0].reassembled and out[0].packet_count == len(chunks)
+    assert any(e.code == "Z" and abs(float(e.value) - 12.345) < 1e-9
+               for e in out[0].elements), [(e.code, e.value) for e in out[0].elements]
+    print("    ASCII SYN 9 包重组 + 分包降级 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("协议契约/边界回归测试")
@@ -372,6 +404,7 @@ def main() -> int:
         ("谎报长度重同步", test_false_length_resync),
         ("ASCII 分类码/包号", test_ascii_compliance),
         ("YAML center/password", test_yaml_center_password),
+        ("ASCII SYN 重组/降级", test_ascii_syn_reassembly_and_partial),
     ]
     for name, fn in tests:
         print(f">>> {name}")
