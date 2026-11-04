@@ -1283,7 +1283,7 @@ class SL651Decoder:
 
                 label = desc if vi == 0 else f"{desc}[{vi}]"
                 elements.append(ElementValue(
-                    code=code.upper(), name=label, value=val, unit=unit,
+                    code=code, name=label, value=val, unit=unit,
                     raw=vs, data_type="ASCII", decimal=decimals,
                 ))
             i = j

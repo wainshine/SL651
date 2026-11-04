@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from sl651.bcd import (
@@ -1197,6 +1198,38 @@ class SL427Decoder:
             warnings.append(f"数据域解析失败，降级为原始摘要: {e}")
             return [self._raw_param_element("重组原始数据", data_field)], None
 
+    def _parse_b1_records(
+        self, func_code: int, rest: bytes, warnings: list[str]
+    ) -> list[ElementValue]:
+        """按 func_code 展开 B1 存储记录；返回已解析要素，余字节留 warning。"""
+        if func_code == 0x0E:
+            items = _parse_statistical_rainfall(rest)
+            consumed = len(items) * 4
+        else:
+            definition = C.CTRL_FUNC_MAP.get(func_code)
+            item_len = definition["byteLen"] if definition else 0
+            if not definition or item_len <= 0:
+                return []
+            items = []
+            if definition.get("array", False):
+                items = _parse_ctrl_func_data(func_code, rest)
+                consumed = len(items) * item_len
+            else:
+                pos = 0
+                while pos + item_len <= len(rest):
+                    chunk = rest[pos:pos + item_len]
+                    parsed = _parse_ctrl_func_data(func_code, chunk)
+                    if not parsed:
+                        break
+                    items.extend(parsed)
+                    pos += item_len
+                consumed = pos
+        if items and consumed < len(rest):
+            warnings.append(
+                f"AFN=B1H 存储数据 {len(rest)}B，已解析 {consumed}B，"
+                f"剩余 {len(rest) - consumed}B 未展开")
+        return items
+
     def _parse_data_field_impl(
         self, afn: int, ctrl: dict, data_field: bytes,
         warnings: list[str] | None = None,
@@ -1367,10 +1400,16 @@ class SL427Decoder:
                     day = safe_bcd_to_int(seg[1])
                     month = safe_bcd_to_int(seg[2])
                     year = safe_bcd_to_int(seg[3])
-                    if (None in (hour, day, month, year)
-                            or not 0 <= hour <= 23
-                            or not 1 <= month <= 12
-                            or not 1 <= day <= 31):
+                    valid = not (None in (hour, day, month, year)
+                                 or not 0 <= hour <= 23
+                                 or not 1 <= month <= 12
+                                 or not 1 <= day <= 31)
+                    if valid:
+                        try:
+                            date(2000 + year, month, day)
+                        except ValueError:
+                            valid = False
+                    if not valid:
                         text = "-"
                         warnings.append(
                             f"AFN=B1H {label}越界或非法: {bytes_to_hex_compact(seg)}")
@@ -1382,20 +1421,9 @@ class SL427Decoder:
                     ))
                 rest = data_field[9:]
                 if rest:
-                    parsed = (_parse_statistical_rainfall(rest)
-                              if func_code == 0x0E
-                              else _parse_ctrl_func_data(func_code, rest))
+                    parsed = self._parse_b1_records(func_code, rest, warnings)
                     if parsed:
                         elements.extend(parsed)
-                        definition = C.CTRL_FUNC_MAP.get(func_code)
-                        item_len = definition["byteLen"] if definition else 0
-                        if (func_code != 0x0E and item_len > 0
-                                and not definition.get("array", False)
-                                and len(rest) > item_len):
-                            warnings.append(
-                                f"AFN=B1H 存储数据 {len(rest)}B，"
-                                f"func=0x{func_code:02X} 单条 {item_len}B，"
-                                f"当前仅解析首条，剩余 {len(rest) - item_len}B 未展开")
                     else:
                         warnings.append(
                             f"AFN=B1H func=0x{func_code:02X} 的存储数据无法按 7.3.22 解析，"

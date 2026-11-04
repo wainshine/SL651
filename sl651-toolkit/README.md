@@ -265,7 +265,7 @@ python tests/test_round1_blindspots.py  # 10 项盲区测试
 - **v1.4.3**：v2.8 审计修复
   - M-1：ASCII 标识符大小写无关 lookup（casefold），修复 `pH`/`PH`/`ph` 断链；补穿透式不变量测试；
   - M-2：SL427 数据域解析统一受保护入口，DIV 重组非法 BCD 降级原始摘要 + warning，不再裸抛 `ValueError`；变异套件补 DIV 分支；
-  - L-1：B1 多记录截断留 warning；L-2：B1 起止时间越界占位 + warning；
+  - L-1：B1 多记录按 func 展开，尾随半条留 warning；L-2：B1 起止时间按日历校验，越界占位 + warning；
   - L-3：fixture 测试 docstring 改为“工具显示口径基线”；
   - 测试 11 套件。
 

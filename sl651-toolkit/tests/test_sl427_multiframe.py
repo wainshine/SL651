@@ -230,16 +230,26 @@ def test_b1_solid_storage_parse() -> None:
     assert "参数种类/编号" in names and "开始时间" in names and "结束时间" in names, names
     assert any(e.name == "雨量" for e in r.elements), names
 
-    # L-1：多记录只解析首条必须留 warning
+    # L-1：多记录应逐条展开；尾随半条留 warning
     multi = data[:9] + bytes.fromhex("001000") * 12
     rm = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), multi))
-    assert any("仅解析首条" in w for w in rm.warnings), rm.warnings
+    assert len([e for e in rm.elements if e.name == "雨量"]) == 12, rm.elements
+    assert not any("仅解析首条" in w for w in rm.warnings), rm.warnings
+
+    partial = data[:9] + bytes.fromhex("001000") * 3 + b"\x12"
+    rp = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), partial))
+    assert any("剩余 1B 未展开" in w for w in rp.warnings), rp.warnings
 
     # L-2：BCD 合法但日历越界必须占位 + warning
     bad_time = bytes([0x01]) + bytes.fromhex("30240102") + bytes.fromhex("30240102")
     rt = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), bad_time))
     assert any(e.name == "开始时间" and e.value == "-" for e in rt.elements), rt.elements
     assert any("越界" in w for w in rt.warnings), rt.warnings
+
+    # 日历越界（2 月 31 日）也要占位
+    feb31 = bytes([0x01]) + bytes.fromhex("001f0202") + bytes.fromhex("001f0202")
+    rf = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), feb31))
+    assert any(e.name == "开始时间" and e.value == "-" for e in rf.elements), rf.elements
     print("    B1 固态存储头/数据 + 多记录/时间校验 OK")
 
 
