@@ -1,7 +1,7 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.4.2
-> 最后更新：2026-11-03
+> 版本：v1.4.3
+> 最后更新：2026-11-05
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
 ---
@@ -437,9 +437,9 @@ python web/app.py
 | `test_sl427_query_afn.py` | SL427 查询类 AFN 50H~65H：17 个查询帧结构 + 20 组响应解析 + 0xAA/0xFF 缺测填充容错（v1.3.1 M-2） |
 | `test_sl427_control_afn.py` | SL427 控制/配置 AFN 90H~96H、A0H~A2H：编码 + 响应解析 + 7 项超限校验 + 0xAA 填充容错（v1.3.1 M-2） |
 | `test_sl651_multipacket.py` | SL651 多包 SYN/ETB 重组：2/3 包、乱序、增量喂入、垃圾字节、单帧直通、ASCII 方向位保留、逐包 CRC 拒绝、缓存上限、旧方言/重同步；16 位单包 5003B、合计 5050B 直接解析、decode SYN 降级（v1.4.2） |
-| `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`；300B 直接解析、B1、84 超长（v1.4.2） |
-| `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏；ASCII 分类码/包号、YAML center/password（v1.4.2） |
-| `test_constants_spec.py` | 表 C.1 HEX 132 键、ASCII 130 字面键、G.1 独立、FDH RAW（v1.4.2） |
+| `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`；300B 直接解析、B1 多记录/时间校验、84 超长、DIV 非法 BCD 降级（v1.4.3） |
+| `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏；ASCII 分类码/包号、pH lookup、YAML center/password（v1.4.3） |
+| `test_constants_spec.py` | 表 C.1 HEX 132 键、ASCII 130 字面键、G.1 独立、FDH RAW、131 行 fixture、lookup 不变量（v1.4.3） |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -548,7 +548,7 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 任务 | 说明 |
 |------|------|
 | 审计 v2.5/v2.6/补充修复 | SL651 SYN 逐包 CRC/缓存上限/错误通道；SL427 DIV 分帧；综合参数/填充/0x0D/45H；编码器契约；CLI 脱敏；TcpSender/YAML/雨量站 |
-| 测试增强 | 8 → 11 套件（SL427 分帧 14 组、协议契约 15 组、表 C.1/G.1 常量 5 组、多包 12 组） |
+| 测试增强 | 8 → 11 套件（SL427 分帧 15 组、协议契约 15 组、表 C.1/G.1 常量 6 组、多包 12 组、变异 5 组） |
 
 ### ⬜ 远期（P4）
 

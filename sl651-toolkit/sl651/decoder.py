@@ -275,6 +275,14 @@ def _build_byte_table(bytes_list: list[int], direction: int, etx_pos: int, syn_p
     return result
 
 
+_ASCII_CASEFOLD = {k.casefold(): v for k, v in C.SL651_ASCII_ELEMENTS.items()}
+
+
+def _lookup_ascii(code: str):
+    """ASCII 标识符大小写无关查找（表键保留规约原样，如 pH）。"""
+    return C.SL651_ASCII_ELEMENTS.get(code) or _ASCII_CASEFOLD.get(code.casefold())
+
+
 class SL651Decoder:
     """SL651 报文解码器。"""
 
@@ -1236,7 +1244,7 @@ class SL651Decoder:
             if ts_desc is not None:
                 entry = (ts_desc, "")
             else:
-                entry = C.SL651_ASCII_ELEMENTS.get(code.upper())
+                entry = _lookup_ascii(code)
 
             if code.upper() in ("F1F1", "F0F0", "ST", "TT"):
                 i += 1
@@ -1247,7 +1255,7 @@ class SL651Decoder:
             j = i + 2
             while j < len(tokens):
                 nxt = tokens[j]
-                nxt_entry = C.SL651_ASCII_ELEMENTS.get(nxt.upper())
+                nxt_entry = _lookup_ascii(nxt)
                 if (nxt_entry or _ascii_time_step_desc(nxt) is not None
                         or nxt.upper() in ("F1F1", "F0F0", "ST", "TT")):
                     break

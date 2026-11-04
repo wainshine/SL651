@@ -316,6 +316,12 @@ def test_ascii_compliance() -> None:
     assert SL651Decoder()._extract_ascii_times(
         b"ST 1234567890 K TT 2306010100 Z 12.345 ")[3] == "水库"
 
+    # M-1：pH 表键必须穿透运行时 lookup（pH/PH/ph）
+    r_ph = SL651Decoder().decode(
+        enc.build_ascii_frame([("pH", "7.2")]))
+    ph = [e for e in r_ph.elements if e.code == "PH"]
+    assert ph and ph[0].name == "pH", [(e.code, e.name) for e in r_ph.elements]
+
     # 旧 2 字符 HEX 分类码：仍兼容，但必须留 warning
     legacy = bytearray(frame)
     body = bytes(legacy[24:-5])

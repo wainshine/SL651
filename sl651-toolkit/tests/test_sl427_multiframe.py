@@ -229,7 +229,18 @@ def test_b1_solid_storage_parse() -> None:
     names = [e.name for e in r.elements]
     assert "参数种类/编号" in names and "开始时间" in names and "结束时间" in names, names
     assert any(e.name == "雨量" for e in r.elements), names
-    print("    B1 固态存储头/数据解析 OK")
+
+    # L-1：多记录只解析首条必须留 warning
+    multi = data[:9] + bytes.fromhex("001000") * 12
+    rm = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), multi))
+    assert any("仅解析首条" in w for w in rm.warnings), rm.warnings
+
+    # L-2：BCD 合法但日历越界必须占位 + warning
+    bad_time = bytes([0x01]) + bytes.fromhex("30240102") + bytes.fromhex("30240102")
+    rt = SL427Decoder().decode(enc.build_frame(0xB1, make_ctrl(1, 0x01), bad_time))
+    assert any(e.name == "开始时间" and e.value == "-" for e in rt.elements), rt.elements
+    assert any("越界" in w for w in rt.warnings), rt.warnings
+    print("    B1 固态存储头/数据 + 多记录/时间校验 OK")
 
 
 def test_84_overlong_warning() -> None:
@@ -239,6 +250,24 @@ def test_84_overlong_warning() -> None:
     assert any(">2B" in w for w in r.warnings), r.warnings
     assert any(e.name == "电压" and e.value == "12.34" for e in r.elements)
     print("    84 超长 warning OK")
+
+
+def test_div_invalid_bcd_degrades() -> None:
+    """M-2：DIV 重组直接解析遇非法 BCD 必须降级，不得裸抛 ValueError。"""
+    enc = _enc()
+    payload = bytes.fromhex(
+        "dc17f01bf2e5dfb14175377d0f1c6724cd97c9154fe4808ba782cd892b67252ddd167b492382")
+    n = len(payload)
+    chunks = [payload[:n // 3], payload[n // 3:2 * n // 3], payload[2 * n // 3:]]
+    d = SL427Decoder()
+    out = []
+    for i, chunk in enumerate(chunks):
+        out += d.feed(_packet(enc, 0xB1, chunk, 3 - i, func_code=0x08))
+    assert len(out) == 1, f"应重组 1 帧, errors={d.errors[:2]}"
+    msg = out[0]
+    assert any("解析失败" in w for w in msg.warnings), msg.warnings
+    assert any(e.name == "重组原始数据" for e in msg.elements), msg.elements
+    print("    DIV 非法 BCD 降级原始摘要 OK")
 
 
 def main() -> int:
@@ -260,6 +289,7 @@ def main() -> int:
         ("300B 直接解析", test_large_div_direct_parse),
         ("B1 解析", test_b1_solid_storage_parse),
         ("84 超长", test_84_overlong_warning),
+        ("DIV 非法 BCD", test_div_invalid_bcd_degrades),
     ]
     for name, fn in tests:
         print(f">>> {name}")

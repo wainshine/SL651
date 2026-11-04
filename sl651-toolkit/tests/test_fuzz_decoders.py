@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sl651 import SL651Decoder
 from sl651.decoder import DecodeError as SL651DecodeError
 from sl651.encoder import SL651Encoder
-from sl427 import SL427Decoder, SL427Encoder, encode_address
+from sl427 import SL427Decoder, SL427Encoder, encode_address, make_ctrl
 from sl427.decoder import DecodeError as SL427DecodeError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -176,12 +176,37 @@ def test_legal_frames_no_raise() -> None:
           f"{len(fill_cases)} 个填充响应 OK")
 
 
+def test_sl427_div_feed_fuzz() -> None:
+    """SL427 DIV 重组变异：feed() 不得泄漏 ValueError/IndexError（v2.8 M-2）。"""
+    print(">>> SL427 DIV 重组变异")
+    enc = SL427Encoder(encode_address(method=1, admin_code=110108, stn_id=1284))
+    payload = bytes.fromhex(
+        "dc17f01bf2e5dfb14175377d0f1c6724cd97c9154fe4808ba782cd892b67252ddd167b492382")
+    n = len(payload)
+    chunks = [payload[:n // 3], payload[n // 3:2 * n // 3], payload[2 * n // 3:]]
+    base = [
+        enc.build_frame(0xB1, make_ctrl(1, 0x08, div=1), c, divs=3 - i)
+        for i, c in enumerate(chunks)
+    ]
+    rng = random.Random(20261105)
+    for i in range(120):
+        frames = [_mutate(f, rng) for f in base]
+        dec = SL427Decoder()
+        try:
+            dec.feed(b"".join(frames))
+        except Exception as e:  # noqa: BLE001
+            FAILURES.append(f"DIV#{i}: {type(e).__name__}: {e}")
+    assert not FAILURES, f"DIV feed 未受控异常: {FAILURES[:5]}"
+    print("    120 组 DIV 变异无未受控异常 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("解码器变异/模糊测试")
     print("=" * 60)
     for name, fn in (("SL651", test_sl651_fuzz), ("SL427", test_sl427_fuzz),
                      ("SL651 feed", test_sl651_feed_fuzz),
+                     ("SL427 DIV", test_sl427_div_feed_fuzz),
                      ("合法帧正向", test_legal_frames_no_raise)):
         try:
             fn()

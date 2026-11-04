@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.4.2
+# SL651 水文规约工具包 v1.4.3
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -254,13 +254,20 @@ python tests/test_sl651.py            # 61 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 11 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 4 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 14 组 + 协议契约 15 组 + 表 C.1/G.1 常量 5 组
+- `run_all.py` 共 11 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 5 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 15 组 + 协议契约 15 组 + 表 C.1/G.1 常量 6 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
 
 ## 五、版本历史
+
+- **v1.4.3**：v2.8 审计修复
+  - M-1：ASCII 标识符大小写无关 lookup（casefold），修复 `pH`/`PH`/`ph` 断链；补穿透式不变量测试；
+  - M-2：SL427 数据域解析统一受保护入口，DIV 重组非法 BCD 降级原始摘要 + warning，不再裸抛 `ValueError`；变异套件补 DIV 分支；
+  - L-1：B1 多记录截断留 warning；L-2：B1 起止时间越界占位 + warning；
+  - L-3：fixture 测试 docstring 改为“工具显示口径基线”；
+  - 测试 11 套件。
 
 - **v1.4.2**：v2.7 审计修复
   - 表 C.1 全量：`SL651_ELEMENTS` 132 键（58H~75H+FDH+F0~FD），ASCII 130 字面键（修正 NS/SQ/SW/ZT，删 SD/MT），表 G.1 独立；

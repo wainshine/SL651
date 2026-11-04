@@ -987,7 +987,7 @@ class SL427Decoder:
         logical_ctrl["div"] = 0
         warnings: list[str] = []
         elements, special_info = self._parse_data_field(
-            afn, logical_ctrl, payload, warnings)
+            afn, logical_ctrl, payload, warnings, degrade=True)
         warnings.insert(
             0,
             f"多帧重组（{len(frames)} 片），各分片 CRC 已逐片校验；"
@@ -1182,6 +1182,24 @@ class SL427Decoder:
     def _parse_data_field(
         self, afn: int, ctrl: dict, data_field: bytes,
         warnings: list[str] | None = None,
+        *, degrade: bool = False,
+    ) -> tuple[list[ElementValue], dict | None]:
+        """统一受保护的数据域解析入口；degrade=True 用于分帧重组降级。"""
+        if warnings is None:
+            warnings = []
+        try:
+            return self._parse_data_field_impl(afn, ctrl, data_field, warnings)
+        except DecodeError:
+            raise
+        except (ValueError, IndexError) as e:
+            if not degrade:
+                raise DecodeError(f"数据域解析失败: {e}") from e
+            warnings.append(f"数据域解析失败，降级为原始摘要: {e}")
+            return [self._raw_param_element("重组原始数据", data_field)], None
+
+    def _parse_data_field_impl(
+        self, afn: int, ctrl: dict, data_field: bytes,
+        warnings: list[str] | None = None,
     ) -> tuple[list[ElementValue], dict | None]:
         if warnings is None:
             warnings = []
@@ -1349,8 +1367,13 @@ class SL427Decoder:
                     day = safe_bcd_to_int(seg[1])
                     month = safe_bcd_to_int(seg[2])
                     year = safe_bcd_to_int(seg[3])
-                    if None in (hour, day, month, year):
+                    if (None in (hour, day, month, year)
+                            or not 0 <= hour <= 23
+                            or not 1 <= month <= 12
+                            or not 1 <= day <= 31):
                         text = "-"
+                        warnings.append(
+                            f"AFN=B1H {label}越界或非法: {bytes_to_hex_compact(seg)}")
                     else:
                         text = f"20{year:02d}-{month:02d}-{day:02d} {hour:02d}:00"
                     elements.append(ElementValue(
@@ -1364,6 +1387,15 @@ class SL427Decoder:
                               else _parse_ctrl_func_data(func_code, rest))
                     if parsed:
                         elements.extend(parsed)
+                        definition = C.CTRL_FUNC_MAP.get(func_code)
+                        item_len = definition["byteLen"] if definition else 0
+                        if (func_code != 0x0E and item_len > 0
+                                and not definition.get("array", False)
+                                and len(rest) > item_len):
+                            warnings.append(
+                                f"AFN=B1H 存储数据 {len(rest)}B，"
+                                f"func=0x{func_code:02X} 单条 {item_len}B，"
+                                f"当前仅解析首条，剩余 {len(rest) - item_len}B 未展开")
                     else:
                         warnings.append(
                             f"AFN=B1H func=0x{func_code:02X} 的存储数据无法按 7.3.22 解析，"

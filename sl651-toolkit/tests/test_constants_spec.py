@@ -93,7 +93,7 @@ def test_fd_raw_decode() -> None:
 
 
 def test_fixture_c1_full() -> None:
-    """131 行 TSV 基线：guide/ASCII/名称/单位逐行回归（PDF 表 C.1 快照）。"""
+    """131 行 TSV 基线：guide/ASCII/名称/单位逐行回归（名称/单位为工具显示口径；映射/单位经 PDF 表 C.1 核对）。"""
     import csv
     fixture = Path(__file__).resolve().parent / "fixtures" / "sl651_table_c1.tsv"
     rows = list(csv.DictReader(fixture.open(encoding="utf-8"), delimiter="\t"))
@@ -114,12 +114,26 @@ def test_fixture_c1_full() -> None:
     print(f"    {len(rows)} 行 TSV 逐行一致；pH 大小写 OK")
 
 
+def test_ascii_lookup_invariant() -> None:
+    """每个 ASCII 表键都必须能穿过运行时 lookup（pH/PH/ph 大小写无关）。"""
+    from sl651.decoder import _lookup_ascii
+    for key, expected in C.SL651_ASCII_ELEMENTS.items():
+        assert _lookup_ascii(key) == expected, key
+        assert _lookup_ascii(key.upper()) == expected, key.upper()
+        assert _lookup_ascii(key.lower()) == expected, key.lower()
+    assert _lookup_ascii("pH") == ("pH", "")
+    assert _lookup_ascii("PH") == ("pH", "")
+    assert _lookup_ascii("ph") == ("pH", "")
+    print(f"    {len(C.SL651_ASCII_ELEMENTS)} 个表键的 lookup 不变量 OK")
+
+
 def main() -> int:
     print("=" * 60)
     print("表 C.1 / 表 G.1 常量基线测试")
     print("=" * 60)
     for fn in (test_hex_table_coverage, test_ascii_c1_table,
-               test_fixture_c1_full, test_g_table_separate, test_fd_raw_decode):
+               test_fixture_c1_full, test_ascii_lookup_invariant,
+               test_g_table_separate, test_fd_raw_decode):
         try:
             fn()
         except Exception as e:
