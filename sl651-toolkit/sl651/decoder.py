@@ -1076,6 +1076,8 @@ class SL651Decoder:
                     value=value, unit="",
                     raw=text, data_type="Hex",
                     byte_len=d_len, decimal=d_dec))
+            if pos < len(hex_str):
+                warnings.append("下行参数正文尾部不足 4B（标识符不完整），已忽略")
             return elements, warnings
 
         if function_code == 0x3A:
@@ -1090,6 +1092,8 @@ class SL651Decoder:
                     code=f"{guide:02X}", name=name,
                     value=f"定义符 0x{def_hex.upper()}",
                     unit="", raw=def_hex.upper(), data_type="Hex"))
+            if pos < len(hex_str):
+                warnings.append("3AH 标识符长度不是 4 的整数倍，尾部字节忽略")
             return elements, warnings
 
         if function_code in (0x47, 0x48):
@@ -1114,6 +1118,7 @@ class SL651Decoder:
                         code="49", name=f"49H {label}原始数据",
                         value=hex_str[pos:].upper(),
                         unit="", raw=hex_str[pos:].upper(), data_type="Hex"))
+                    pos = len(hex_str)
                     break
                 raw = hex_str[pos + 4:pos + 8]
                 elements.append(ElementValue(

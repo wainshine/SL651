@@ -452,6 +452,9 @@ class SL651Encoder:
         """参数设置正文：引导符+定义符+数据值。
 
         a_pad_guides: 需要按规约 6.6.3.3b 做 A 补齐的引导符集合（如目的地地址/短信号码）。
+
+        注意：参数数据按 BCD 编码；密码等表D 中明确为 HEX 的参数不能走本方法，
+        修改密码请用 build_change_password_frame（03H + 10H + 2B HEX）。
         """
         body = bytearray()
         for guide, value, data_len, decimals in params:

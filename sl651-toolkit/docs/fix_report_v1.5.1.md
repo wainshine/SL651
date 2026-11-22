@@ -5,6 +5,7 @@
 > 依据：`audit/audit_report_v3.1.md`
 > 测试：`python3 -B tests/run_all.py` → **12/12**
 > 提交状态：按用户要求 **未执行 git add/commit**
+> 自审计：`audit/self_audit_v1.5.1.md`（未发现新 Medium/High；补 4 处边界/告警与 2 处文档）
 
 ---
 
@@ -18,7 +19,7 @@
 | I-C | Info | FD 的 `FD FD` 兼容口径显式写 warning（规约注 f 固定 F6H），不再静默接受 | `sl651/decoder.py` F3/FD 分支 |
 | I-D | Info | 去掉 `_parse_elements` 中两分支同为 `break` 的死条件 | `sl651/decoder.py` |
 | I-E | Info | 综合参数水质块优先按“5B 位图 + N×4B”严格口径；若仅剩 4B（缺少位图），降级为“水质(原始4B)”+ warning，不猜参数种类 | `sl427/decoder.py::_parse_comprehensive` |
-| 补 | — | 下行 40H/42H 数据短于声明长度、49H 正文非 8B 整数倍时写 warning，不再静默按现有字节错位 | `sl651/decoder.py::_parse_downlink_body` |
+| 补 | — | 下行 40H/42H 数据短于声明长度、3AH 标识符/40H 尾部不足、49H 正文非 8B 整数倍时写 warning；B1 0x0A 的 5B 位图（无值）按位图告警而非单值误读；59H/5AH 短数据告警；5DH 备用区不再误报“未展开” | `sl651/decoder.py::_parse_downlink_body`、`sl427/decoder.py` |
 | I-F | Info | 测试 docstring 由“16 个类型码”改为“13 个标量/结构类型码（0x00/0x0D/0x0E 上下文相关除外）” | `tests/test_spec_conformance.py` |
 
 ---

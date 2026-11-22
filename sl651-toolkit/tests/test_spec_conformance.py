@@ -105,7 +105,20 @@ def test_sl427_type_values() -> None:
         + bytes.fromhex("34120000") + bytes.fromhex("78560000"))).elements
         if e.name in ("水温", "溶解氧")]
     assert quality == [("水温", "123.4", "℃"), ("溶解氧", "56.78", "mg/L")], quality
-    print("    水温/水压/蒸发/电量/气象/土壤/流量对/水质 数值与单位 OK")
+
+    # 综合参数：0x03 流量对 / 0x0A 水质 / 0x0B 土壤（每型一块）
+    r = dec.decode(_b0(0x0E, bytes([1 << 5]) + bytes.fromhex("4523010000")
+                       + bytes.fromhex("3412000000")))
+    assert [e.name for e in r.elements if e.name in ("流量", "累计水量")] == \
+        ["流量", "累计水量"], r.elements
+    r = dec.decode(_b0(0x0E, bytes([1 << 0])
+                       + (1 << 0).to_bytes(5, "little")
+                       + bytes.fromhex("34120000")))
+    assert [e.value for e in r.elements if e.name == "水温"] == ["123.4"], r.elements
+    r = dec.decode(_b0(0x0E, bytes([1 << 1]) + bytes.fromhex("53022000")))
+    assert [e.name for e in r.elements if e.name in ("土壤含水率", "采集深度")] == \
+        ["土壤含水率", "采集深度"], r.elements
+    print("    水温/水压/蒸发/电量/气象/土壤/流量对/水质/综合参数 OK")
 
 
 def test_sl427_statistical_rain_spec() -> None:

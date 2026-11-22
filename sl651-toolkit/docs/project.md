@@ -443,7 +443,7 @@ python web/app.py
 | `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`；300B 直接解析、B1 多记录/时间校验、84 超长、DIV 非法 BCD 降级（v1.4.3） |
 | `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏；ASCII 分类码/包号、pH lookup、YAML center/password（v1.4.3） |
 | `test_constants_spec.py` | 表 C.1 HEX 132 键、ASCII 130 字面键、G.1 独立、FDH RAW、131 行 fixture、lookup 不变量（v1.4.3） |
-| `test_spec_conformance.py` | 规约符合性 12 组：SL427 类型表/统计雨量/B1/水质/不静默丢弃、SL651 F2/F3/FD/0x36 重组/下行标识符/命名空间（v1.5.0） |
+| `test_spec_conformance.py` | 规约符合性 12 组：SL427 类型表/统计雨量/B1/水质/不静默丢弃、SL651 F2/F3/FD/0x36 重组/下行标识符/命名空间（v1.5.0/v1.5.1） |
 
 ### 7.2 福建规定报文测试 ⭐
 

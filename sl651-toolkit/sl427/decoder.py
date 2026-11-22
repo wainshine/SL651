@@ -363,9 +363,10 @@ def _parse_parameter_records(
                 remaining = len(data) - pos
                 block = data[pos:]
                 is_bitmap = (
-                    remaining >= 9 and (remaining - 5) % 4 == 0
-                    and int.from_bytes(block[:5], "little").bit_count()
-                    == (remaining - 5) // 4
+                    remaining == 5
+                    or (remaining >= 9 and (remaining - 5) % 4 == 0
+                        and int.from_bytes(block[:5], "little").bit_count()
+                        == (remaining - 5) // 4)
                 )
                 if not is_bitmap:
                     single_bit = param_byte & 0x0F
@@ -705,7 +706,7 @@ def _parse_water_quality_427(
 ) -> list[ElementValue]:
     """解析水质参数种类及上/下限（表18，5B 位图 + N×4B 小端 BCD）。"""
     out, consumed = _parse_water_quality(data, warnings=warnings)
-    if warnings is not None and consumed and consumed < len(data):
+    if warnings is not None and data and consumed < len(data):
         warnings.append(
             f"水质参数数据 {len(data)}B，已解析 {consumed}B，"
             f"剩余 {len(data) - consumed}B 未展开")
@@ -878,7 +879,8 @@ def _parse_query_response(
             out.append(ElementValue(name=f"事件记录[{C.EVENT_RECORDS[i]}]", value=cnt,
                                     unit="次", raw=bytes_to_hex_compact(seg),
                                     editable=False))
-        _warn_tail(warnings, len(data), n * 2, "AFN=5DH")
+        # 表30：ERC1~18 有效，ERC19~32 备用；64B 中的尾部 28B 不应报“未展开”
+
     elif afn_hex == "57":
         # N×7B 水位基值/上下限 + 4B 终端机报警状态
         if len(data) >= 4:
