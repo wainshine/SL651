@@ -5,6 +5,7 @@
 > 依据：`audit/audit_report_v3.0.md` + `audit/audit_review_v3.0.md`
 > 测试：`python3 -B tests/run_all.py` → **12/12**
 > 提交状态：按用户要求 **未执行 git add/commit**
+> 后续补丁：v3.1 的 L-1/Info 修复见 `docs/fix_report_v1.5.1.md`
 
 ---
 

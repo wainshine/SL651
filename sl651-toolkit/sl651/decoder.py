@@ -1028,9 +1028,11 @@ class SL651Decoder:
 
         def _param_name(guide: int) -> str:
             key = f"{guide:02x}"
+            name = C.SL651_PARAM_NAMES.get(key)
             if key in param_table:
-                return f"参数{key.upper()}({param_table[key][0]}B)"
-            return f"未知参数{key.upper()}"
+                label = name or f"参数{key.upper()}"
+                return f"{label}({param_table[key][0]}B)"
+            return name or f"未知参数{key.upper()}"
 
         if function_code in (0x41, 0x43):
             pos = 0
@@ -1055,6 +1057,10 @@ class SL651Decoder:
                 pos += 4
                 raw = hex_str[pos:pos + d_len * 2]
                 pos += d_len * 2
+                if len(raw) < d_len * 2:
+                    warnings.append(
+                        f"下行参数 {guide:02X}H 数据不足 {d_len}B，按现有字节展示")
+                    pos = len(hex_str)
                 text = raw.upper()
                 value: str | int | float = text or "-"
                 # 6.6.3.3b：40H~43H 目的地地址类参数允许 A 补齐 BCD
@@ -1098,11 +1104,24 @@ class SL651Decoder:
             for label in ("旧密码", "新密码"):
                 if pos + 8 > len(hex_str):
                     break
+                guide = hex_str[pos:pos + 2]
+                def_hex = hex_str[pos + 2:pos + 4]
+                if guide != "03" or def_hex != "10":
+                    warnings.append(
+                        f"49H {label}标识符为 {guide.upper()}{def_hex.upper()}H"
+                        "（期望 03 10H），降级为原始摘要")
+                    elements.append(ElementValue(
+                        code="49", name=f"49H {label}原始数据",
+                        value=hex_str[pos:].upper(),
+                        unit="", raw=hex_str[pos:].upper(), data_type="Hex"))
+                    break
                 raw = hex_str[pos + 4:pos + 8]
                 elements.append(ElementValue(
                     code="03", name=label, value=f"0x{raw.upper()}",
                     unit="", raw=raw.upper(), data_type="Hex", byte_len=2))
                 pos += 8
+            if pos < len(hex_str):
+                warnings.append("49H 正文长度不是 8B 整数倍，尾部字节未解析")
             return elements, warnings
 
         elements.append(ElementValue(
@@ -1134,6 +1153,13 @@ class SL651Decoder:
                         unit="", raw=raw.upper(), data_type="Hex", byte_len=2,
                     ))
                     return elements, warnings
+                warnings.append(
+                    "49H 响应新密码标识符非 03 10H，降级为原始摘要")
+                elements.append(ElementValue(
+                    code="49", name="49H 响应原始数据",
+                    value=hex_str[p:].upper(), unit="",
+                    raw=hex_str[p:].upper(), data_type="Hex"))
+                return elements, warnings
         # A 补齐仅适用于 40H~43H 配置帧的目的地地址类参数（规约 6.6.3.3b）
         allow_a_pad = function_code in (0x40, 0x41, 0x42, 0x43)
 
@@ -1142,8 +1168,6 @@ class SL651Decoder:
             pos += 2
 
             if pos + 2 > len(hex_str):
-                if code == "f2":
-                    break
                 break
             def_hex = hex_str[pos:pos + 2]
             pos += 2
@@ -1183,6 +1207,10 @@ class SL651Decoder:
                 # 之后全是数据（长度通常 >32B，不能由 5 位定义符表达）。
                 fixed = "f3" if code == "f3" else "f6"
                 is_fixed = def_hex == fixed or (code == "fd" and def_hex == "fd")
+                if code == "fd" and def_hex == "fd":
+                    warnings.append(
+                        "FDH 定义符为 FDH（规约表C.1 注 f 规定固定 F6H），"
+                        "按固定标志兼容解析")
                 if is_fixed:
                     raw_hex = hex_str[pos:]
                     pos = len(hex_str)

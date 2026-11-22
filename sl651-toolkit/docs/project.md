@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.5.0
+> 版本：v1.5.1
 > 最后更新：2026-11-05
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -546,6 +546,14 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 审计 v2.3 修复 | M-1 FUNC_MAP 名称 / M-2 SL427 0xAA 填充 / M-3 人工置数 F2 契约 / M-4 地址长度校验 |
 | 审计 v2.3 L 级修复 | L-1 5CH 名称 / L-2 ASCII 方向位 / L-3 死键 / L-4 0x26 量程注释 / L-5 示例注释 / L-6 文档计数 |
 | 测试增强 | 主套件 57 → 59 项；辅助套件补 0xAA 填充容错、地址长度校验、ASCII 方向位 |
+
+### ✅ 已完成（v1.5.1）
+
+| 项 | 说明 |
+|----|------|
+| 41H 0x0D | 表D.2 采集要素位图按 A1~A8 = 8 字节，定义符 0x40（v3.1 L-1） |
+| 下行展示/校验 | 41H/43H 参数语义名称；49H 03 10H 定义符校验；FD FD 兼容 warning；40H 短数据/49H 尾随 warning；死分支清理 |
+| 综合参数水质 | 严格 5B 位图+N×4B 优先；仅 4B 时降级“水质(原始4B)”+ warning |
 
 ### ✅ 已完成（v1.5.0）
 

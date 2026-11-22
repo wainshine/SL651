@@ -477,6 +477,18 @@ def _parse_comprehensive(data: bytes, warnings: list[str] | None = None) -> list
         if not (bit_flag & (1 << i)):
             continue
         func_code = C.COMP_BITS[i]
+        remaining = len(data) - offset
+        if func_code == 0x0A and remaining == 4:
+            # 现场兼容：严格口径为 5B 位图 + N×4B；若只带单个 4B 值，
+            # 无法判定参数种类，降级为原始摘要并留 warning。
+            warnings.append(
+                "综合参数水质块仅 4B（缺少 5B 位图），按原始 4B 值降级")
+            raw = bytes_to_hex_compact(data[offset:offset + 4])
+            items.append(ElementValue(
+                name="水质(原始4B)", value=raw, unit="", raw=raw,
+                editable=False, byte_len=4))
+            offset += 4
+            continue
         parsed, consumed = _parse_parameter_records(
             func_code, data[offset:], context="comprehensive",
             warnings=warnings, max_records=1)

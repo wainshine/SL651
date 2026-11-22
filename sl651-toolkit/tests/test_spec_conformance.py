@@ -48,7 +48,11 @@ def _names(elements):
 # ----------------------------------------------------------------------
 
 def test_sl427_type_table_spec() -> None:
-    """表33~44：16 个类型码的 byteLen/decimal/unit 与规约一致。"""
+    """表33~44：13 个标量/结构类型码的 byteLen/decimal/unit 与规约一致。
+
+    0x00（确认/应答）、0x0D（电压/报警状态）、0x0E（综合参数/统计雨量）
+    为上下文相关类型，不在本表内。
+    """
     expected = {
         0x01: (3, 1, "mm"), 0x02: (4, 3, "m"), 0x03: (5, 3, "m³/s"),
         0x04: (3, 3, "m/s"), 0x05: (3, 2, "m"), 0x06: (3, 0, "kW"),
@@ -214,7 +218,13 @@ def test_sl427_no_silent_drop() -> None:
     # 固定长度查询响应：5FH 应为 12B
     r = dec.decode(enc.build_frame(0x5F, make_ctrl(1, 0x00), b"\x00" * 10))
     assert any("固定 12B" in w for w in r.warnings), r.warnings
-    print("    B0/AFN64/B1/A1H/5FH 尾随/长度 warning OK")
+
+    # 综合参数水质块仅 4B：无法判定参数种类，降级原始 4B + warning
+    r = dec.decode(enc.build_query_response(
+        0x0E, bytes.fromhex("01") + bytes.fromhex("34120000")))
+    assert any(e.name == "水质(原始4B)" for e in r.elements), r.elements
+    assert any("水质块仅 4B" in w for w in r.warnings), r.warnings
+    print("    B0/AFN64/B1/A1H/5FH/综合参数4B warning OK")
 
 
 # ----------------------------------------------------------------------
@@ -258,7 +268,10 @@ def test_sl651_f3_fd_spec() -> None:
     fd = [e for e in r.elements if e.code == "FD"]
     assert len(fd) == 1 and fd[0].byte_len == 40, fd
     assert len(r.elements) == 1, r.elements
-    print("    F3/FD 固定定义符 + 消费到末尾 OK")
+    # FD FD 兼容口径：接受但必须留 warning（规约注 f 固定 F6H）
+    r = SL651Decoder().decode(enc.build_frame(0x32, hdr + bytes([0xFD, 0xFD]) + payload))
+    assert any("F6H" in w for w in r.warnings), r.warnings
+    print("    F3/FD 固定定义符 + 消费到末尾 + FD FD warning OK")
 
 
 def test_sl651_f3_real_reassembly() -> None:
@@ -308,7 +321,7 @@ def test_sl651_downlink_ids_spec() -> None:
         bytes.fromhex("012002280310")
     assert enc.build_read_config_frame([0x20, 0x23], function_code=0x43)[22:-3] == \
         bytes.fromhex("20082310")
-    assert enc.build_read_config_frame([0x0D])[22:-3] == bytes.fromhex("0D20")
+    assert enc.build_read_config_frame([0x0D])[22:-3] == bytes.fromhex("0D40")
     assert enc.build_read_config_frame([0x97], function_code=0x43)[22:-3] == \
         bytes.fromhex("9700")
     # 未知/变长参数必须显式报错，不能静默 0 定义符
@@ -326,6 +339,7 @@ def test_sl651_downlink_ids_spec() -> None:
 
 def test_sl651_downlink_namespace() -> None:
     """下行 41H 不得再解成附录C 要素；49H 上下行均显示密码。"""
+    enc = _sl651_enc()
     dec = SL651Decoder()
     f41 = ("7E7E" "1000000006" "00" "0000" "41" "800E" "02" "0000"
            "221206135846" "012002280310" "05" "0EE7")
@@ -333,6 +347,7 @@ def test_sl651_downlink_namespace() -> None:
     names = _names(r.elements)
     assert "断面面积" not in names, names
     assert [e.code for e in r.elements] == ["01", "02", "03"], names
+    assert names[0] == "中心站地址(4B)", names
 
     f49 = ("7E7E" "0000000001" "00" "0000" "49" "8010" "02" "0000"
            "221206161203" "03100000" "031004D2" "05" "0ADF")
@@ -343,7 +358,25 @@ def test_sl651_downlink_namespace() -> None:
              "0000000001031004D2030573")
     vals = {e.name: e.value for e in dec.decode_hex(f49up).elements}
     assert vals == {"新密码": "0x04D2"}, vals
-    print("    41H 命名空间 / 49H 旧新密码 / 49H 响应新密码 OK")
+
+    # 非标 49H 定义符：降级原始摘要 + warning，不按固定步长盲切
+    f49bad = ("7E7E" "0000000001" "00" "0000" "49" "8010" "02" "0000"
+              "221206161203" "03100000" "031104D2" "05" "0ADF")
+    rbad = dec.decode_hex(f49bad)
+    assert any("03 10H" in w for w in rbad.warnings), rbad.warnings
+
+    # 40H 数据不足声明长度：留 warning，不静默错位
+    f40short = enc.build_frame(0x40, bytes.fromhex("0310AA"), direction=1,
+                               end_marker=SC.ENQ)
+    r40 = dec.decode(f40short)
+    assert any("数据不足" in w for w in r40.warnings), r40.warnings
+
+    # 49H 正文非 8B 整数倍：尾部留 warning
+    f49tail = enc.build_frame(0x49, bytes.fromhex("03100000031004D2FF"),
+                              direction=1, end_marker=SC.ENQ)
+    r49t = dec.decode(f49tail)
+    assert any("8B 整数倍" in w for w in r49t.warnings), r49t.warnings
+    print("    41H 命名空间 / 49H 密码/非标定义符 / 40H 短数据 / 49H 尾随 OK")
 
 
 # ----------------------------------------------------------------------
