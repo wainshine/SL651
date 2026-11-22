@@ -85,7 +85,7 @@ def test_fd_raw_decode() -> None:
                        password=0, station_type=0x48)
     body = (bytes([0xF1, 0xF1]) + enc.station_addr_bytes
             + bytes([0x4B, 0xF0, 0xF0]) + bytes.fromhex("2601010100")
-            + bytes([0xFD, 0x18]) + bytes.fromhex("010203"))
+            + bytes([0xFD, 0xF6]) + bytes.fromhex("010203"))
     r = SL651Decoder().decode(enc.build_frame(0x32, body))
     fd = [e for e in r.elements if e.code == "FD"]
     assert fd and "流速批量数据" in fd[0].value, [(e.code, e.value) for e in r.elements]

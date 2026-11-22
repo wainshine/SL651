@@ -132,14 +132,15 @@ def test_a_pad_bcd() -> None:
 
 def test_comprehensive_and_fill() -> None:
     enc = _enc427()
-    # bit5 流量(AA×5) + bit6 水位 + bit7 雨量
-    payload = (bytes([0xE0]) + b"\xAA" * 5
+    # bit5 流量(10B: 流量5B + 累计水量5B) + bit6 水位 + bit7 雨量
+    payload = (bytes([0xE0]) + b"\xAA" * 10
                + bytes.fromhex("45230001") + bytes.fromhex("001000")
                + b"\x00" * 4)
     frame = enc.build_frame(0xB0, make_ctrl(1, 0x0E), payload)
     r = SL427Decoder().decode(frame)
     by_name = {e.name: e for e in r.elements}
-    assert by_name["流量/水量"].value == "-", by_name["流量/水量"].value
+    assert by_name["流量"].value == "-", by_name["流量"].value
+    assert by_name["累计水量"].value == "-", by_name["累计水量"].value
     assert by_name["水位"].raw != by_name["雨量"].raw
     assert by_name["水位"].value != by_name["雨量"].value
 

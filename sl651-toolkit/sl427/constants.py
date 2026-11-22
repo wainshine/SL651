@@ -121,14 +121,52 @@ RT_KINDS_REPORT = [
     "水温", "水质", "土壤含水率", "蒸发量", "报警或状态", "水压", "图片", "备用",
 ]
 
-# 水质参数种类（表18，D0~D31 + 备用）
-WATER_QUALITY_PARAMS = [
-    "水温", "pH值", "溶解氧", "电导率", "浊度", "高锰酸盐指数", "氨氮", "总磷",
-    "总氮", "叶绿素a", "化学需氧量", "五日生化需氧量(BOD5)", "铜", "锌", "氟化物", "硒",
-    "砷", "汞", "镉", "铬(六价)", "铅", "氰化物", "挥发酚", "石油类",
-    "阴离子表面活性剂", "硫化物", "粪大肠杆菌", "硫酸盐", "氯化物", "硝酸盐", "铁", "锰",
-    "备用32", "备用33", "备用34", "备用35", "备用36", "备用37", "备用38", "备用39",
+# 水质参数种类（表18，D0~D31 + 备用）：(名称, 单位, 小数位)
+# 数值格式 N(D,d) → 4 字节小端 BCD，小数位 d（见 _parse_water_quality）。
+WATER_QUALITY_SPECS: list[tuple[str, str, int]] = [
+    ("水温", "℃", 1),
+    ("pH值", "", 2),
+    ("溶解氧", "mg/L", 2),
+    ("电导率", "μS/cm", 0),
+    ("浊度", "NTU", 0),
+    ("高锰酸盐指数", "mg/L", 2),
+    ("氨氮", "mg/L", 2),
+    ("总磷", "mg/L", 3),
+    ("总氮", "mg/L", 2),
+    ("叶绿素a", "μg/L", 3),
+    ("化学需氧量", "mg/L", 1),
+    ("五日生化需氧量(BOD5)", "mg/L", 1),
+    ("铜", "mg/L", 3),
+    ("锌", "mg/L", 3),
+    ("氟化物", "mg/L", 3),
+    ("硒", "mg/L", 3),
+    ("砷", "mg/L", 3),
+    ("汞", "μg/L", 3),
+    ("镉", "mg/L", 2),
+    ("铬(六价)", "mg/L", 2),
+    ("铅", "mg/L", 1),
+    ("氰化物", "mg/L", 3),
+    ("挥发酚", "mg/L", 2),
+    ("石油类", "mg/L", 3),
+    ("阴离子表面活性剂", "mg/L", 2),
+    ("硫化物", "mg/L", 3),
+    ("粪大肠杆菌", "个/L", 0),
+    ("硫酸盐", "mg/L", 2),
+    ("氯化物", "mg/L", 1),
+    ("硝酸盐", "mg/L", 2),
+    ("铁", "mg/L", 2),
+    ("锰", "mg/L", 2),
+    ("备用32", "", 0),
+    ("备用33", "", 0),
+    ("备用34", "", 0),
+    ("备用35", "", 0),
+    ("备用36", "", 0),
+    ("备用37", "", 0),
+    ("备用38", "", 0),
+    ("备用39", "", 0),
 ]
+
+WATER_QUALITY_PARAMS = [name for name, _unit, _dec in WATER_QUALITY_SPECS]
 
 # 事件记录项（表30，AFN=5DH）
 EVENT_RECORDS = [
@@ -146,27 +184,27 @@ HEART_MAP: dict[int, str] = {
 }
 
 CTRL_FUNC_MAP: dict[int, dict] = {
-    0x00: {"name": "确认/应答", "byteLen": 0, "decimal": 0, "signed": False, "array": False, "unit": ""},
-    0x01: {"name": "雨量", "byteLen": 3, "decimal": 1, "signed": False, "array": False, "unit": "mm"},
-    0x02: {"name": "水位", "byteLen": 4, "decimal": 3, "signed": True, "array": True, "unit": "m"},
-    0x03: {"name": "流量/水量", "byteLen": 5, "decimal": 3, "signed": True, "array": True, "unit": "m³/s"},
-    0x04: {"name": "流速", "byteLen": 3, "decimal": 3, "signed": True, "array": True, "unit": "m/s"},
-    0x05: {"name": "闸位", "byteLen": 3, "decimal": 2, "signed": False, "array": False, "unit": "m"},
-    0x06: {"name": "功率", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "kW"},
-    0x07: {"name": "气象参数", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": ""},
-    0x08: {"name": "电量参数", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": ""},
-    0x09: {"name": "水温", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "°C"},
-    0x0A: {"name": "水质", "byteLen": 3, "decimal": 0, "signed": True, "array": True, "unit": ""},
-    0x0B: {"name": "土壤含水率", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "%"},
-    0x0C: {"name": "蒸发量", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "mm"},
-    0x0D: {"name": "电压/报警状态", "byteLen": 2, "decimal": 2, "signed": False, "array": False, "unit": "V"},
+    0x00: {"name": "确认/应答", "byteLen": 0, "decimal": 0, "signed": False, "array": False, "unit": "", "kind": "scalar"},
+    0x01: {"name": "雨量", "byteLen": 3, "decimal": 1, "signed": False, "array": False, "unit": "mm", "kind": "scalar"},
+    0x02: {"name": "水位", "byteLen": 4, "decimal": 3, "signed": True, "array": True, "unit": "m", "kind": "scalar"},
+    0x03: {"name": "流量/水量", "byteLen": 5, "decimal": 3, "signed": True, "array": True, "unit": "m³/s", "kind": "flow_pair"},
+    0x04: {"name": "流速", "byteLen": 3, "decimal": 3, "signed": True, "array": True, "unit": "m/s", "kind": "scalar"},
+    0x05: {"name": "闸位", "byteLen": 3, "decimal": 2, "signed": False, "array": True, "unit": "m", "kind": "scalar"},
+    0x06: {"name": "功率", "byteLen": 3, "decimal": 0, "signed": False, "array": True, "unit": "kW", "kind": "scalar"},
+    0x07: {"name": "气象参数", "byteLen": 8, "decimal": 0, "signed": False, "array": False, "unit": "", "kind": "weather"},
+    0x08: {"name": "电量参数", "byteLen": 4, "decimal": 2, "signed": False, "array": True, "unit": "kW·h", "kind": "scalar"},
+    0x09: {"name": "水温", "byteLen": 2, "decimal": 1, "signed": False, "array": True, "unit": "℃", "kind": "scalar"},
+    0x0A: {"name": "水质", "byteLen": 4, "decimal": 0, "signed": False, "array": True, "unit": "", "kind": "water_quality"},
+    0x0B: {"name": "土壤含水率", "byteLen": 4, "decimal": 0, "signed": False, "array": True, "unit": "%", "kind": "soil"},
+    0x0C: {"name": "蒸发量", "byteLen": 3, "decimal": 1, "signed": False, "array": True, "unit": "mm", "kind": "scalar"},
+    0x0D: {"name": "电压/报警状态", "byteLen": 2, "decimal": 2, "signed": False, "array": False, "unit": "V", "kind": "scalar"},
     # 注: 0x0D 是上下文相关的「报警或状态参数」（表5/表6）：
     #   - B0 查询输入电压响应: 2B 电压 + 4B alarm/state（§7.3.22 n)）
     #   - C0 自报: 2B 电压 + alarm/state + Tp（表24 D12「报警或状态(监测终端机电压)」）
     #   - 81 随机自报: 0x0D 无中间参数，仅 alarm + state + Tp（§7.5.2）
     #   - AFN=84H: 专用 2B 电压（表B.98）
-    0x0E: {"name": "综合参数", "byteLen": 1, "decimal": 0, "signed": False, "array": False, "unit": ""},
-    0x0F: {"name": "水压", "byteLen": 3, "decimal": 0, "signed": False, "array": False, "unit": "MPa"},
+    0x0E: {"name": "综合参数", "byteLen": 1, "decimal": 0, "signed": False, "array": False, "unit": "", "kind": "scalar"},
+    0x0F: {"name": "水压", "byteLen": 4, "decimal": 2, "signed": False, "array": True, "unit": "kPa", "kind": "scalar"},
 }
 
 COMP_BITS = [0x0A, 0x0B, 0x06, 0x07, 0x05, 0x03, 0x02, 0x01]

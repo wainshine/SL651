@@ -382,13 +382,31 @@ class SL651Encoder:
     # 下行帧（中心站 → 遥测站）
     # ------------------------------------------------------------------
 
-    def build_query_body(self, element_guides: list[int]) -> bytes:
-        """查询指定要素正文（3AH 功能码）：列出要查询的要素引导符+定义符（数据域为空）。"""
+    def build_query_body(
+        self, element_guides: list[int | tuple[int, int, int]]
+    ) -> bytes:
+        """查询指定要素正文（3AH）：每项为引导符或 (引导符, 数据字节数, 小数位)。
+
+        仅给引导符时按表C.1 的 N(D,d) 查定义符；未知要素抛 EncodeError，
+        可改用 (guide, len, dec) 显式指定，避免产出定义符恒 0 的畸形帧。
+        """
         body = bytearray()
-        for guide in element_guides:
+        for item in element_guides:
+            if isinstance(item, tuple):
+                if len(item) != 3:
+                    raise EncodeError(f"要素定义须为 (guide, len, dec): {item!r}")
+                guide, data_len, decimals = item
+            else:
+                guide = item
+                _check_guide(guide)
+                definition = C.SL651_ELEMENT_DEFS.get(f"{guide:02x}")
+                if definition is None:
+                    raise EncodeError(
+                        f"要素 0x{guide:02X} 的数据定义未知，请改用 (guide, len, dec) 形式")
+                data_len, decimals = definition
             _check_guide(guide)
             body.append(guide)
-            body.append(_make_def_byte(0, 0))  # 查询时数据域长度为0
+            body.append(_make_def_byte(data_len, decimals))
         return bytes(body)
 
     def build_query_frame(self) -> bytes:
@@ -460,13 +478,35 @@ class SL651Encoder:
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_read_config_frame(
-        self, guides: list[int], function_code: int = 0x41
+        self, guides: list[int | tuple[int, int, int]], function_code: int = 0x41
     ) -> bytes:
         """读取基本配置/运行参数帧（下行，默认 0x41；0x43 读取运行参数，结束符 ENQ）。
 
-        正文为待读取参数的标识符列表（引导符+定义符，表52）。
+        每项为参数标识符或 (标识符, 数据字节数, 小数位)。仅给标识符时按
+        41H→表D.1、43H→表D.4 查定义符；未知/变长参数抛 EncodeError，
+        可改用元组显式指定。
         """
-        return self.build_frame(function_code, self.build_query_body(guides),
+        table = (C.SL651_PARAM_DEFS_D4 if function_code in (0x42, 0x43)
+                 else C.SL651_PARAM_DEFS_D1)
+        body = bytearray()
+        for item in guides:
+            if isinstance(item, tuple):
+                if len(item) != 3:
+                    raise EncodeError(f"参数定义须为 (guide, len, dec): {item!r}")
+                guide, data_len, decimals = item
+            else:
+                guide = item
+                _check_guide(guide)
+                definition = table.get(f"{guide:02x}")
+                if definition is None:
+                    raise EncodeError(
+                        f"参数 0x{guide:02X} 的数据定义未知或长度不定，"
+                        "请改用 (guide, len, dec) 形式")
+                data_len, decimals = definition
+            _check_guide(guide)
+            body.append(guide)
+            body.append(_make_def_byte(data_len, decimals))
+        return self.build_frame(function_code, bytes(body),
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_init_solid_storage(self) -> bytes:
@@ -474,7 +514,7 @@ class SL651Encoder:
 
         正文含 97H「固态存储数据初始化」标识符（附录D #120）。
         """
-        return self.build_frame(0x47, bytes([0x97]),
+        return self.build_frame(0x47, bytes([0x97, 0x00]),
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_change_password_frame(self, old_pw: int, new_pw: int) -> bytes:
@@ -486,20 +526,22 @@ class SL651Encoder:
         for name, v in (("旧密码", old_pw), ("新密码", new_pw)):
             if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 0xFFFF:
                 raise EncodeError(f"{name}超范围(0~0xFFFF): {v}")
-        body = (bytes([0x03, (old_pw >> 8) & 0xFF, old_pw & 0xFF])
-                + bytes([0x03, (new_pw >> 8) & 0xFF, new_pw & 0xFF]))
+        # 旧/新密码各为 03H 引导符 + 10H 定义符(2B/0 位小数) + 2B 数据；
+        # 表65 明确密码数据为 2 字节 HEX（不是 BCD），故此处不能复用 _encode_bcd。
+        body = (bytes([0x03, 0x10, (old_pw >> 8) & 0xFF, old_pw & 0xFF])
+                + bytes([0x03, 0x10, (new_pw >> 8) & 0xFF, new_pw & 0xFF]))
         return self.build_frame(0x49, body,
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     def build_manual_frame(self, payload: bytes) -> bytes:
         """人工置数报（上行，0x35）。
 
-        正文 = F2H 人工置数标识符 + 原编码（SL330，结束符 NN 省略）数据（表38/附录C 注c）。
-        payload 为调用方按 SL330 约定编码的原始字节。
+        正文 = F2H 引导符 + F2H 固定定义符 + 原编码（SL330，结束符 NN 省略）数据
+        （表38 / 附录C 表C.1 注 c）。payload 为调用方按 SL330 约定编码的原始字节。
         """
         if not isinstance(payload, (bytes, bytearray)) or not payload:
             raise EncodeError("人工置数数据必须为非空 bytes")
-        return self.build_frame(0x35, bytes([0xF2]) + bytes(payload))
+        return self.build_frame(0x35, bytes([0xF2, 0xF2]) + bytes(payload))
 
     def build_clock_sync_body(self, dt: datetime | None = None) -> bytes:
         """时钟校准正文（0x4A 表67）：空，发报时间即校时值。"""
@@ -513,12 +555,12 @@ class SL651Encoder:
                                 tx_time=dt)
 
     def build_reset_body(self) -> bytes:
-        """恢复出厂设置正文（表63+D.4#121）：包含 98H 标识符。"""
-        return b'\x98'
+        """恢复出厂设置正文（表63+D.4#121）：98H 引导符 + 00H 定义符。"""
+        return b'\x98\x00'
 
     def build_reset_frame(self) -> bytes:
         """恢复出厂设置帧 (0x48, 下行, 结束符 ENQ)。"""
-        return self.build_frame(0x48, self.build_reset_body(),
+        return self.build_frame(0x48, bytes([0x98, 0x00]),
                                 direction=C.DIR_DOWNLINK, end_marker=C.ENQ)
 
     # ------------------------------------------------------------------

@@ -786,6 +786,11 @@ class SL651Decoder:
             warnings.append(
                 f"SYN 分包帧（total={syn_total}, seq={syn_seq}），"
                 "请使用 feed() 重组；单帧不解析正文")
+        elif direction == 1:
+            # 下行 ASCII 配置帧的附录D 参数解析尚未实现；宁可留空并告警，
+            # 也不要把参数标识符套成附录C 要素（与二进制下行同一原则）。
+            elements = []
+            warnings.append("下行 ASCII 配置帧正文未展开（附录D 参数解析待补充）")
         else:
             elements = self._parse_ascii_elements(data_bytes)
             obs_hex, obs_display, stn_type_hex, stn_type_name = \
@@ -961,9 +966,14 @@ class SL651Decoder:
                 f"SYN 分包帧（total={syn_total}, seq={syn_seq}），"
                 "请使用 feed() 重组；单帧不解析正文")
         elif is_ascii:
-            elements = self._parse_ascii_elements(data_bytes)
+            if direction == 1:
+                elements = []
+                warnings.append("下行 ASCII 配置帧正文未展开（附录D 参数解析待补充）")
+            else:
+                elements = self._parse_ascii_elements(data_bytes)
         else:
-            elements, warnings = self._parse_elements(data_bytes, func)
+            elements, warnings = self._parse_elements(
+                data_bytes, func, direction=direction)
         if extra_warnings:
             warnings.extend(extra_warnings)
 
@@ -1001,8 +1011,107 @@ class SL651Decoder:
             warnings=warnings,
         )
 
+    def _parse_downlink_body(
+        self, data: bytes, function_code: int
+    ) -> tuple[list[ElementValue], list[str]]:
+        """下行配置/查询帧正文：附录D 参数标识符与附录C 要素同一编码空间，
+        必须用功能码区分命名空间，不能套用 SL651_ELEMENTS。"""
+        warnings: list[str] = []
+        hex_str = bytes_to_hex_compact(data).lower()
+        elements: list[ElementValue] = []
+        if not hex_str:
+            return elements, warnings
+
+        param_table = (C.SL651_PARAM_DEFS_D4
+                       if function_code in (0x42, 0x43)
+                       else C.SL651_PARAM_DEFS_D1)
+
+        def _param_name(guide: int) -> str:
+            key = f"{guide:02x}"
+            if key in param_table:
+                return f"参数{key.upper()}({param_table[key][0]}B)"
+            return f"未知参数{key.upper()}"
+
+        if function_code in (0x41, 0x43):
+            pos = 0
+            while pos + 4 <= len(hex_str):
+                guide = int(hex_str[pos:pos + 2], 16)
+                def_hex = hex_str[pos + 2:pos + 4]
+                pos += 4
+                elements.append(ElementValue(
+                    code=f"{guide:02X}", name=_param_name(guide),
+                    value=f"定义符 0x{def_hex.upper()}",
+                    unit="", raw=def_hex.upper(), data_type="Hex"))
+            if pos < len(hex_str):
+                warnings.append("下行配置帧标识符长度不是 4 的整数倍，尾部字节忽略")
+            return elements, warnings
+
+        if function_code in (0x40, 0x42):
+            pos = 0
+            while pos + 4 <= len(hex_str):
+                guide = int(hex_str[pos:pos + 2], 16)
+                def_byte = int(hex_str[pos + 2:pos + 4], 16)
+                d_len, d_dec = C.parse_def_byte(def_byte)
+                pos += 4
+                raw = hex_str[pos:pos + d_len * 2]
+                pos += d_len * 2
+                text = raw.upper()
+                value: str | int | float = text or "-"
+                # 6.6.3.3b：40H~43H 目的地地址类参数允许 A 补齐 BCD
+                if (text.startswith("A") and len(text) > 1
+                        and all(ch in "0123456789" for ch in text[1:])):
+                    v = int(text[1:], 10)
+                    value = v / (10 ** d_dec) if d_dec else v
+                    warnings.append(
+                        f"参数 {guide:02X} 首半字节为 A，"
+                        "按规约 6.6.3.3b A 补齐 BCD 解析")
+                elements.append(ElementValue(
+                    code=f"{guide:02X}", name=_param_name(guide),
+                    value=value, unit="",
+                    raw=text, data_type="Hex",
+                    byte_len=d_len, decimal=d_dec))
+            return elements, warnings
+
+        if function_code == 0x3A:
+            pos = 0
+            while pos + 4 <= len(hex_str):
+                guide = int(hex_str[pos:pos + 2], 16)
+                def_hex = hex_str[pos + 2:pos + 4]
+                pos += 4
+                entry = C.SL651_ELEMENTS.get(f"{guide:02x}")
+                name = entry[0] if entry else f"未知要素{guide:02X}"
+                elements.append(ElementValue(
+                    code=f"{guide:02X}", name=name,
+                    value=f"定义符 0x{def_hex.upper()}",
+                    unit="", raw=def_hex.upper(), data_type="Hex"))
+            return elements, warnings
+
+        if function_code in (0x47, 0x48):
+            label = "初始化固态存储" if function_code == 0x47 else "恢复出厂设置"
+            elements.append(ElementValue(
+                code=hex_str[:2].upper(), name=label, value=hex_str.upper(),
+                unit="", raw=hex_str.upper(), data_type="Hex"))
+            return elements, warnings
+
+        if function_code == 0x49:
+            pos = 0
+            for label in ("旧密码", "新密码"):
+                if pos + 8 > len(hex_str):
+                    break
+                raw = hex_str[pos + 4:pos + 8]
+                elements.append(ElementValue(
+                    code="03", name=label, value=f"0x{raw.upper()}",
+                    unit="", raw=raw.upper(), data_type="Hex", byte_len=2))
+                pos += 8
+            return elements, warnings
+
+        elements.append(ElementValue(
+            code="", name="下行正文", value=hex_str.upper(),
+            unit="", raw=hex_str.upper(), data_type="Hex"))
+        return elements, warnings
+
     def _parse_elements(
-        self, data: bytes, function_code: int = 0
+        self, data: bytes, function_code: int = 0, direction: int = 0
     ) -> tuple[list[ElementValue], list[str]]:
         warnings: list[str] = []
         if not data:
@@ -1011,6 +1120,20 @@ class SL651Decoder:
         elements: list[ElementValue] = []
         pos = 0
         is_uniform = function_code == 0x31
+
+        if direction == 1:
+            return self._parse_downlink_body(data, function_code)
+        if function_code == 0x49:
+            # 表66：49H 上行响应 = F1F1 + 站码5B + 新密码(03 10 + 2B HEX)
+            if hex_str.startswith("f1f1") and len(hex_str) >= 14 + 8:
+                p = 14  # F1F1(2B) + 站码(5B)
+                if hex_str[p:p + 4] == "0310":
+                    raw = hex_str[p + 4:p + 8]
+                    elements.append(ElementValue(
+                        code="03", name="新密码", value=f"0x{raw.upper()}",
+                        unit="", raw=raw.upper(), data_type="Hex", byte_len=2,
+                    ))
+                    return elements, warnings
         # A 补齐仅适用于 40H~43H 配置帧的目的地地址类参数（规约 6.6.3.3b）
         allow_a_pad = function_code in (0x40, 0x41, 0x42, 0x43)
 
@@ -1018,10 +1141,25 @@ class SL651Decoder:
             code = hex_str[pos:pos + 2]
             pos += 2
 
+            if pos + 2 > len(hex_str):
+                if code == "f2":
+                    break
+                break
+            def_hex = hex_str[pos:pos + 2]
+            pos += 2
+            def_byte = int(def_hex, 16)
+            d_len, d_dec = C.parse_def_byte(def_byte)
+
             if code == "f2":
-                # 人工置数报（0x35）：F2 标识符 + n 字节原编码数据（规约表38），
-                # F2 后无定义符，剩余全部字节视为原始载荷（与编码器契约一致）。
-                raw_hex = hex_str[pos:]
+                # 人工置数报（0x35）：表C.1 注 c 规定标识符为 F2H 引导符 + 固定
+                # 定义符 F2H，其后全部为 SL330 原编码载荷。兼容旧编码器（F2 后
+                # 直接跟载荷）时把定义符位置的首字节归还给载荷并告警。
+                if def_hex == "f2":
+                    raw_hex = hex_str[pos:]
+                else:
+                    raw_hex = def_hex + hex_str[pos:]
+                    warnings.append(
+                        "F2H 人工置数定义符缺失或非 F2H，按旧口径将首字节计入载荷")
                 pos = len(hex_str)
                 n_bytes = len(raw_hex) // 2
                 preview = raw_hex[:32].upper()
@@ -1035,16 +1173,41 @@ class SL651Decoder:
                 ))
                 break
 
-            if pos + 2 > len(hex_str):
-                break
-            def_hex = hex_str[pos:pos + 2]
-            pos += 2
-            def_byte = int(def_hex, 16)
-            d_len, d_dec = C.parse_def_byte(def_byte)
-
             if code == "80":
                 elements.append(self._parse_80(def_byte, hex_str, pos, d_len))
                 pos += d_len * 2
+                continue
+
+            if code in ("f3", "fd"):
+                # 表C.1 注 d/f：图片 F3H、批量流速 F6H 为固定定义符，标识符
+                # 之后全是数据（长度通常 >32B，不能由 5 位定义符表达）。
+                fixed = "f3" if code == "f3" else "f6"
+                is_fixed = def_hex == fixed or (code == "fd" and def_hex == "fd")
+                if is_fixed:
+                    raw_hex = hex_str[pos:]
+                    pos = len(hex_str)
+                else:
+                    raw_hex = hex_str[pos:pos + d_len * 2]
+                    pos += len(raw_hex)
+                    warnings.append(
+                        f"{code.upper()}H 定义符非固定值 {fixed.upper()}H，"
+                        f"按声明长度 {d_len}B 解析；剩余数据继续按要素解析")
+                n_bytes = len(raw_hex) // 2
+                preview = raw_hex[:32].upper()
+                if len(raw_hex) > 32:
+                    preview += "..."
+                if code == "f3":
+                    name, label, unit = "图片信息", "图片数据", "KB"
+                else:
+                    name, label, unit = "流速批量数据", "流速批量数据", ""
+                elements.append(ElementValue(
+                    code=code.upper(), name=name,
+                    value=f"<{label} {n_bytes} 字节: {preview}>",
+                    unit=unit, raw=raw_hex.upper(), data_type="Hex",
+                    byte_len=n_bytes, decimal=0,
+                ))
+                if is_fixed:
+                    break
                 continue
 
             if code == "f0" and def_hex == "f0":

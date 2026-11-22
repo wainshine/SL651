@@ -88,12 +88,12 @@ enc = SL651Encoder(
 | `build_query_frame()` | 0x37 | 下行查询所有实时数据（空正文，结束符 ENQ） |
 | `build_downlink_query(func)` | 任意 | 通用空正文下行查询 |
 | `build_query_pump_data/software_version/status_alarm/event_record/clock()` | 44/45/46/50/51 | 无参数体下行查询 |
-| `build_query_body(element_guides)` | 3AH | 下行查询指定要素（正文含引导符） |
-| `build_manual_frame(payload)` | 0x35 | 人工置数报（F2 标识符 + 原编码） |
-| `build_init_solid_storage()` | 0x47 | 初始化固态存储（97H 标识符） |
-| `build_change_password_frame(old, new)` | 0x49 | 修改密码（03H 标识符） |
+| `build_query_body(element_guides)` | 3AH | 下行查询指定要素（按表C.1 生成定义符；支持 `(guide,len,dec)` 元组） |
+| `build_manual_frame(payload)` | 0x35 | 人工置数报（F2H + F2H 固定定义符 + 原编码） |
+| `build_init_solid_storage()` | 0x47 | 初始化固态存储（97H + 00H 定义符） |
+| `build_change_password_frame(old, new)` | 0x49 | 修改密码（03H + 10H 定义符 + 2B HEX） |
 | `build_set_param_frame(params, function_code=0x40)` | 0x40/0x42 | 下行参数设置/修改运行参数（结束符 ENQ） |
-| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 读取基本配置/运行参数 |
+| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 读取配置（按表D.1/D.4 生成定义符；支持元组） |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行时钟校准（结束符 ENQ） |
 | `build_reset_frame()` | 0x48 | 下行恢复出厂（结束符 ENQ） |
 | `build_frame(function_code, body, direction, ascii_mode, end_marker, tx_time)` | 任意 | 通用帧构造 |

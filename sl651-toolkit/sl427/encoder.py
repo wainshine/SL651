@@ -669,6 +669,27 @@ class SL427Encoder:
             data.extend(_bcd_le(iv, 2))
         return self.build_param_set_frame(0xA1, 0x00, bytes(data), pw)
 
+    def build_set_report_kinds_30(
+        self, mask: int, intervals: list[int], pw: int = 0,
+    ) -> bytes:
+        """设置数据自报种类及时间间隔（AFN=A1H，固定 30B 口径）。
+
+        规约 §7.2.23 a) 写“数据域为 30 字节”，b) 列 15 个参数；按表24 D0~D13
+        共 14 个间隔 + 2B 位图 = 30B，D14 图片不编间隔。若需与严格按 30B
+        实现的终端互通，用本方法；变长旧方法 `build_set_report_kinds` 保留。
+        """
+        if not 0 <= mask <= 0xFFFF:
+            raise EncodeError(f"自报种类位图超范围(0~0xFFFF): {mask}")
+        if len(intervals) != 14:
+            raise EncodeError(
+                f"固定 30B 口径需 14 个自报间隔（D0~D13），当前 {len(intervals)} 个")
+        data = bytearray(mask.to_bytes(2, "little"))
+        for iv in intervals:
+            if not 1 <= iv <= 9999:
+                raise EncodeError(f"自报间隔超范围(1~9999 min): {iv}")
+            data.extend(_bcd_le(iv, 2))
+        return self.build_param_set_frame(0xA1, 0x00, bytes(data), pw)
+
     def build_set_channel(
         self, main_type: int, main_addr: bytes,
         backup_type: int = 0xAA, backup_addr: bytes = b"\xAA", pw: int = 0,

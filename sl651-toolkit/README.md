@@ -1,4 +1,4 @@
-# SL651 水文规约工具包 v1.4.3
+# SL651 水文规约工具包 v1.5.0
 
 基于《水文监测数据通信规约 SL651-2014》和《水资源监测数据传输规约 SL/T 427-2021》实现的 Python 工具包。
 
@@ -45,7 +45,7 @@ sl651-toolkit/
 │   ├── stations.yaml           # 多站点配置
 │   └── mqttx_subscribe.txt     # MQTTX 订阅参考
 ├── tests/
-│   ├── run_all.py              # 统一测试入口（11 套件）
+│   ├── run_all.py              # 统一测试入口（12 套件）
 │   ├── test_sl651.py           # 主测试 61 项
 │   ├── test_round1_blindspots.py    # 盲区测试 10 项
 │   ├── test_simulator_integration.py # 模拟器端到端集成
@@ -53,10 +53,14 @@ sl651-toolkit/
 │   ├── test_sl427_param_afn.py # SL427 参数 AFN 16H~20H
 │   ├── test_sl427_query_afn.py # SL427 查询 AFN 50H~65H
 │   ├── test_sl427_control_afn.py # SL427 控制/配置 AFN 90H~A2H
-│   └── test_sl651_multipacket.py # SL651 多包 SYN/ETB 重组
+│   ├── test_sl651_multipacket.py # SL651 多包 SYN/ETB 重组
+│   ├── test_sl427_multiframe.py  # SL427 DIV=1 分帧重组
+│   ├── test_protocol_contracts.py # 协议契约/边界
+│   ├── test_constants_spec.py    # 表 C.1/G.1 常量基线
+│   └── test_spec_conformance.py  # 规约符合性（v1.5.0 新增）
 ├── docs/
 │   └── project.md              # 项目规格说明书
-├── audit/                      # 审计报告 v1.1~v2.3
+├── audit/                      # 审计报告 v1.1~v3.0（含对抗复核）
 ├── requirements.txt            # PyYAML>=6.0 + flask
 └── README.md
 ```
@@ -164,12 +168,12 @@ for e in r.elements:
 | `build_query_frame()` | 0x37 | 下行 | ENQ | 查询所有实时数据 |
 | `build_downlink_query(func)` | 任意 | 下行 | ENQ | 通用空正文下行查询 |
 | `build_query_pump_data()` 等 | 44/45/46/50/51 | 下行 | ENQ | 水泵/版本/状态/事件/时钟查询 |
-| `build_query_body(guides)` | 0x3A | 下行 | ENQ | 查询指定要素（正文含引导符） |
-| `build_manual_frame(payload)` | 0x35 | 上行 | ETX | 人工置数报 |
+| `build_query_body(guides)` | 0x3A | 下行 | ENQ | 查询指定要素（按表C.1 生成定义符；支持 `(guide,len,dec)`） |
+| `build_manual_frame(payload)` | 0x35 | 上行 | ETX | 人工置数报（F2H 引导符 + F2H 固定定义符 + 载荷） |
 | `build_init_solid_storage()` | 0x47 | 下行 | ENQ | 初始化固态存储 |
 | `build_change_password_frame(old, new)` | 0x49 | 下行 | ENQ | 修改密码 |
 | `build_set_param_frame(params, function_code=0x40)` | 0x40/0x42 | 下行 | ENQ | 参数设置/修改运行参数 |
-| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 下行 | ENQ | 读取基本配置/运行参数 |
+| `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 下行 | ENQ | 读取配置（按表D.1/D.4 生成定义符；支持元组覆盖） |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | 时钟校准 |
 | `build_reset_frame()` | 0x48 | 下行 | ENQ | 恢复出厂 |
 | `build_frame(function_code, body, ...)` | 任意 | 任意 | 可指定 | 通用帧构造（正文 >4095 抛 EncodeError） |
@@ -254,13 +258,21 @@ python tests/test_sl651.py            # 61 项主测试
 python tests/test_round1_blindspots.py  # 10 项盲区测试
 ```
 
-- `run_all.py` 共 11 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 5 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 15 组 + 协议契约 15 组 + 表 C.1/G.1 常量 6 组
+- `run_all.py` 共 12 套件：主套件 61 项 + 盲区 10 项 + 模拟器集成 5 组 + 变异 5 组 + SL427 参数 13 组 + 查询 21 组 + 控制 10 组 + SL651 多包 12 组 + SL427 分帧 15 组 + 协议契约 15 组 + 表 C.1/G.1 常量 6 组 + 规约符合性 12 组
 - 23 条福建 + 25 条北京真实报文 CRC + 要素级验证
 - CI：`.github/workflows/ci.yml`（Python 3.10/3.11/3.12 自动运行 `tests/run_all.py`）
 
 ---
 
 ## 五、版本历史
+
+- **v1.5.0**：v3.0 规约符合性审计修复
+  - SL427 类型表按表33~44 修正：水温 2B/0.1、水压 4B/0.01/kPa、电量 4B/0.01/kW·h、蒸发 3B/0.1、气象 8B、土壤 4B、水质 5B 位图+N×4B；0x03 流量/累计水量成对解析；
+  - SL427 统计雨量按表54 位域 + 表33 0.1mm（原 10 倍偏小）；59H/5AH 水质按表18 小数位/单位；
+  - SL651 F2 定义符（F2 F2 + 载荷）、F3/FD 固定定义符消费到末尾；47/48/49/3A/41/43 按表C.1/D.1/D.4 生成定义符；
+  - 下行 41H/49H 不再套用附录C 要素表；B0/C0/B1/查询响应尾随字节统一 warning；
+  - 新增 `tests/test_spec_conformance.py`（12 组），`run_all.py` 12 套件；
+  - 文档同步；`__version__ = "1.5.0"`。
 
 - **v1.4.3**：v2.8 审计修复
   - M-1：ASCII 标识符大小写无关 lookup（casefold），修复 `pH`/`PH`/`ph` 断链；补穿透式不变量测试；

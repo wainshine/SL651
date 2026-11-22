@@ -1,6 +1,6 @@
 # SL651-Toolkit 项目规格说明书
 
-> 版本：v1.4.3
+> 版本：v1.5.0
 > 最后更新：2026-11-05
 > 原名 `requirements.md`，v1.2.3 起更名为 `project.md`。历史审计报告（v1.4~v1.9）中的 `requirements.md` 引用即指本文档。
 
@@ -35,7 +35,7 @@ sl651-toolkit/
 ├── simulator/      设备模拟器（base_station / generators / water_level / rain / soil / sender / engine）
 ├── tools/          CLI 工具（decode_cli / simulate_cli）
 ├── web/            Web 解码界面（Flask app.py）
-├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 61 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包 7 个辅助套件）
+├── tests/          测试脚本（run_all.py 统一入口；test_sl651.py 61 项 + 盲区/模拟器集成/变异/SL427 参数·查询·控制/SL651 多包/分帧/契约/常量/规约符合性 11 个辅助套件）
 ├── examples/       示例报文（福建规定 23 条 / 北京水务 25 条真实报文）
 ├── docs/           需求与设计文档
 └── audit/          审计报告
@@ -91,7 +91,7 @@ sl651-toolkit/
 | `32` | 定时报 | 上行 | ETX | ✅ | ✅ `build_timing_frame` | 定时上报水文要素 |
 | `33` | 加报报 | 上行 | ETX | ✅ | ✅ `build_alarm_frame` | 阈值触发或变化报警 |
 | `34` | 小时报 | 上行 | ETX | ✅ | ✅ `build_hourly_frame` | 每小时 12 组 5min 间隔水位 |
-| `35` | 人工置数报 | 上行 | ETX | ✅ | ✅ `build_manual_frame` | F2 标识符 + 原编码数据 |
+| `35` | 人工置数报 | 上行 | ETX | ✅ | ✅ `build_manual_frame` | F2H 引导符 + F2H 固定定义符 + 原编码数据（表C.1 注 c） |
 | `36` | 图片报 | 上行 | ETX | ✅ | — | 图片信息（F3 标识符） |
 | `37` | 查询实时数据 | 下行 | ENQ | — | ✅ `build_query_frame` | 查询所有实时数据（表42） |
 | `38` | 查询时段数据 | 下行 | ENQ | — | — | 中心站查询遥测站指定要素时段数据 |
@@ -104,9 +104,9 @@ sl651-toolkit/
 | `44` | 查询水泵电机数据 | 下行 | ENQ | — | ✅ `build_query_pump_data` | 空正文 |
 | `45` | 查询软件版本 | 下行 | ENQ | — | ✅ `build_query_software_version` | 空正文 |
 | `46` | 查询状态及报警 | 下行 | ENQ | — | ✅ `build_query_status_alarm` | 空正文 |
-| `47` | 初始化固态存储 | 下行 | ENQ | — | ✅ `build_init_solid_storage` | 97H 标识符（附录D #120） |
-| `48` | 恢复出厂设置 | 下行 | ENQ | — | ✅ `build_reset_frame` | 98H 标识符 |
-| `49` | 修改密码 | 下行 | ENQ | — | ✅ `build_change_password_frame` | 03H 标识符 + 新旧密码 2B |
+| `47` | 初始化固态存储 | 下行 | ENQ | — | ✅ `build_init_solid_storage` | 97H + 00H 定义符（附录D #120） |
+| `48` | 恢复出厂设置 | 下行 | ENQ | — | ✅ `build_reset_frame` | 98H + 00H 定义符 |
+| `49` | 修改密码 | 下行 | ENQ | — | ✅ `build_change_password_frame` | 03H + 10H 定义符 + 新旧密码 2B HEX |
 | `4A` | 设置时钟 | 下行 | ENQ | — | ✅ `build_clock_sync_frame` | 时钟校准 |
 | `4B` | 设置IC卡状态 | 下行 | ENQ | — | — | 中心站设置遥测站IC卡状态 |
 | `4C` | 控制水泵 | 下行 | ENQ | — | — | 控制抽（排）水站水泵开关机/状态自报 |
@@ -167,15 +167,15 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_alarm_frame(elements)` | 0x33 | 上行 | ETX | ✅ 加报报 |
 | `build_hourly_frame(levels, inst, v)` | 0x34 | 上行 | ETX | ✅ 小时报（12×F5数组） |
 | `build_test_frame(elements)` | 0x30 | 上行 | ETX | ✅ 测试报（正文同定时报） |
-| `build_manual_frame(payload)` | 0x35 | 上行 | ETX | ✅ 人工置数报（F2 标识符 + 原编码） |
-| `build_init_solid_storage()` | 0x47 | 下行 | ENQ | ✅ 初始化固态存储（97H 标识符） |
-| `build_change_password_frame(old, new)` | 0x49 | 下行 | ENQ | ✅ 修改密码（03H 标识符） |
+| `build_manual_frame(payload)` | 0x35 | 上行 | ETX | ✅ 人工置数报（F2H + F2H 定义符 + 原编码） |
+| `build_init_solid_storage()` | 0x47 | 下行 | ENQ | ✅ 初始化固态存储（97H + 00H） |
+| `build_change_password_frame(old, new)` | 0x49 | 下行 | ENQ | ✅ 修改密码（03H + 10H + 2B HEX） |
 | `build_link_maintain_frame()` | 0x2F | 上行 | ETX | ✅ 链路维持 |
 | `build_ascii_frame(elements)` | 0x32 | 上行 | ETX | ✅ ASCII 编码（SOH起始） |
 | `build_query_frame()` | 0x37 | 下行 | ENQ | ✅ 查询实时数据（空正文，表42） |
 | `build_downlink_query(func)` | 任意 | 下行 | ENQ | ✅ 通用空正文下行查询 |
 | `build_query_pump_data/software_version/status_alarm/event_record/clock()` | 44/45/46/50/51 | 下行 | ENQ | ✅ 无参数体查询 |
-| `build_query_body(guides)` | 3AH | 下行 | ENQ | ✅ 查询指定要素（正文含引导符） |
+| `build_query_body(guides)` | 3AH | 下行 | ENQ | ✅ 查询指定要素（按表C.1 生成定义符；支持元组覆盖） |
 | `build_set_param_frame(params, function_code=0x40)` | 0x40/0x42 | 下行 | ENQ | ✅ 参数设置/修改运行参数 |
 | `build_read_config_frame(guides, function_code=0x41)` | 0x41/0x43 | 下行 | ENQ | ✅ 读取基本配置/运行参数 |
 | `build_clock_sync_frame(dt)` | 0x4A | 下行 | ENQ | ✅ 时钟校准 |
@@ -226,7 +226,7 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `96` | 修改终端密码 | 下行 | — | ✅ `build_change_password` | 2B BCD |
 | `90~96` | 控制响应 | 上行 | ✅ `_parse_control_response` | — | 5AH=执行完毕 |
 | `A0` | 设置需查询实时种类 | 下行 | ✅ | ✅ `build_set_realtime_kinds` | 2B 位图（表23） |
-| `A1` | 设置自报种类及间隔 | 下行 | ✅ | ✅ `build_set_report_kinds` | 2B 位图 + N×2B（表24/25） |
+| `A1` | 设置自报种类及间隔 | 下行 | ✅ | ✅ `build_set_report_kinds` | 2B 位图 + N×2B（表24/25）；固定 30B 用 `build_set_report_kinds_30` |
 | `A2` | 设置主备信道及中心地址 | 下行 | ✅ | ✅ `build_set_channel` | 类型码+地址 |
 | `B0` | 查询/实时值 | 上行 | ✅ | ✅ `build_query_response` | 按命令类型码解析 |
 | `C0` | 自报实时数据 | 上行 | ✅ | ✅ `build_self_report_c0` | D+alarm(2B)+state(2B)+Tp(7B) |
@@ -240,6 +240,8 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 
 ### 3.3 控制域 C（规约表4）
 
+> 类型码 0x01~0x0F 的长度/小数位/单位按 §7.3.22 表33~44 解析；0x03 按“流量+累计水量”成对，0x07 气象 8B、0x0A 水质 5B 位图+N×4B、0x0B 土壤 4B 为专用解析（v1.5.0）。
+>
 > DIV=1 分帧：`SL427Decoder.feed()` 对 B0/B1/84 重组；C0/81/82/FF 与 83/61 安全降级。83/61 的 `L×1K` 语义待真实样本确认前不重组。B0/C0/84 的 0x0D 按 2B 电压解析，81 的 0x0D 无中间参数（表24 D12 / §7.3.22 n)）。
 
 | 数据位 | 定义 | 说明 |
@@ -296,7 +298,8 @@ def parse_def_byte(b: int) -> tuple[int, int]:
 | `build_switch_comm/switch_relay_work(machine, pw)` | ✅ | 切换通信机/中继工作机 (AFN=94/95H) |
 | `build_change_password(password, pw)` | ✅ | 修改密码 (AFN=96H) |
 | `build_set_realtime_kinds(mask, pw)` | ✅ | 设置需查询实时种类 (AFN=A0H) |
-| `build_set_report_kinds(mask, intervals, pw)` | ✅ | 设置自报种类及间隔 (AFN=A1H) |
+| `build_set_report_kinds(mask, intervals, pw)` | ✅ | 设置自报种类及间隔 (AFN=A1H，变长) |
+| `build_set_report_kinds_30(mask, intervals14, pw)` | ✅ | 固定 30B 口径（2B 位图 + 14×2B，表24 D0~D13） |
 | `build_set_channel(main_type, main_addr, ...)` | ✅ | 设置主备信道及中心地址 (AFN=A2H) |
 | `build_param_set_frame(afn, func, data, pw, tp, key1)` | ✅ | 通用参数设置帧模板（PW 校验统一抛 EncodeError） |
 
@@ -440,6 +443,7 @@ python web/app.py
 | `test_sl427_multiframe.py` | SL427 DIV=1 分帧：B0/84 重组、乱序、缺片、坏 CRC、C0/83 安全降级、单帧 DIVS=1、编码 `divs=`；300B 直接解析、B1 多记录/时间校验、84 超长、DIV 非法 BCD 降级（v1.4.3） |
 | `test_protocol_contracts.py` | 异常同一性、编码器非法输入、小时报边界、地址往返、A 补齐 BCD、填充/综合参数/信道、0x0D 上下文、45H 保留位、CLI 脱敏；ASCII 分类码/包号、pH lookup、YAML center/password（v1.4.3） |
 | `test_constants_spec.py` | 表 C.1 HEX 132 键、ASCII 130 字面键、G.1 独立、FDH RAW、131 行 fixture、lookup 不变量（v1.4.3） |
+| `test_spec_conformance.py` | 规约符合性 12 组：SL427 类型表/统计雨量/B1/水质/不静默丢弃、SL651 F2/F3/FD/0x36 重组/下行标识符/命名空间（v1.5.0） |
 
 ### 7.2 福建规定报文测试 ⭐
 
@@ -543,6 +547,19 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 审计 v2.3 L 级修复 | L-1 5CH 名称 / L-2 ASCII 方向位 / L-3 死键 / L-4 0x26 量程注释 / L-5 示例注释 / L-6 文档计数 |
 | 测试增强 | 主套件 57 → 59 项；辅助套件补 0xAA 填充容错、地址长度校验、ASCII 方向位 |
 
+### ✅ 已完成（v1.5.0）
+
+| 项 | 说明 |
+|----|------|
+| SL427 类型表 | 按表33~44 修正 0x07/08/09/0A/0B/0C/0F；0x03 流量+累计水量成对；气象/水质/土壤专用解析 |
+| 统计雨量 | 表54 位域 + 表33 0.1mm（/10）；四类用例 |
+| 水质小数位 | 59H/5AH 与 B0/C0 的 0x0A 按表18 的 (name,unit,decimal) 缩放 |
+| SL651 标识符 | F2/F3/FD 固定定义符；47H/48H=97/98+00H；49H=03H+10H；3AH/41H/43H 按表C.1/D.1/D.4 生成 |
+| 下行解析 | 41H/49H 使用附录D 命名空间；F1F1 跳过按功能码区分 |
+| 不静默丢弃 | B0/C0/B1/查询响应尾随字节统一 warning；`_parse_parameter_records` 返回 consumed |
+| A1H 30B | 新增 `build_set_report_kinds_30`（2B 位图 + 14×2B）固定 30B 口径；默认方法仍变长 + warning |
+| 测试 | 新增 `test_spec_conformance.py` 12 组；`run_all.py` 12 套件 |
+
 ### ✅ 已完成（v1.4.1）
 
 | 任务 | 说明 |
@@ -555,7 +572,7 @@ python tools/decode_cli.py sl651 --file examples/beijing_messages.txt
 | 任务 | 说明 |
 |------|------|
 | SL427 5CH 历史日记录响应 | 所给规约文本/PDF 正文未定义字段，暂以字节摘要显示 |
-| SL651 41H/42H/43H 参数标识符细化 | 当前按附录D 引导符列表构造，具体参数定义未全量收录 |
+| SL651 41H/42H/43H 参数标识符细化 | 已按表D.1/D.4 收录固定长度参数；变长/未知参数需用 `(guide,len,dec)` 元组显式指定 |
 | SL427 下行参数/查询帧解码 | 下行帧当前仅显示「下行报文」摘要，未回显命令数据域 |
 | 模拟器 MQTT broker 联调 | 已覆盖内存/TCP 全链路；MQTT 需 mqttx CLI 环境 |
 | 45H 状态位保留位 | 表58 定义 BIT0~11，表60 数据为 4B；v1.4.1 已按 4B/12 有效位实现，保留位非零写 `warnings` |

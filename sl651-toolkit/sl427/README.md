@@ -8,8 +8,8 @@
 
 | 文件 | 说明 |
 |------|------|
-| `constants.py` | 协议常量：AFN 表（61 项）、控制功能码表（16 种）、告警/终端状态位、参数种类/事件记录/水质参数表、`parse_ctrl`/`make_ctrl` |
-| `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派数据解析（含 50H~65H/90H~96H/A0H~A2H 响应）；`feed()` 支持 B0/B1/84 的 DIV=1 分帧重组，C0/81/82/83 安全降级 |
+| `constants.py` | 协议常量：AFN 表（61 项）、控制功能码表（16 种，含 `kind/byteLen/decimal/unit`）、告警/终端状态位、参数种类/事件记录/水质参数表（表18 小数位）、`parse_ctrl`/`make_ctrl` |
+| `decoder.py` | 68H 帧解析器：CRC8 校验、AUX 分离、按 AFN+命令类型码分派；类型码 0x01~0x0F 按表33~44 解析（流量对/气象/水质/土壤专用），B0/C0/B1/查询响应尾随字节留 warning；`feed()` 支持 B0/B1/84 DIV=1 重组 |
 | `encoder.py` | 68H 帧编码器：自报 5 类 + 参数设置 17 类 + 查询 17 类 + 控制 7 类 + 配置 3 类 + 通用模板 |
 
 ## 核心 API
@@ -80,6 +80,7 @@ enc = SL427Encoder(addr)
 | `build_set_level_limits(points, pw)` | 0x17 | 水位基值/上下限（每点 7B） |
 | `build_set_pressure_limits(points, pw)` | 0x18 | 水压上/下限（每点 8B） |
 | `build_set_water_quality(afn, params, pw)` | 0x19/0x1A | 水质参数种类及上/下限 |
+| `build_set_report_kinds_30(mask, intervals14, pw)` | 0xA1 | 固定 30B 口径（2B 位图 + 14×2B） |
 | `build_set_water_amount(values, pw)` | 0x1B | 水量初始值（每表 5B） |
 | `build_set_relay_code_len(seconds, pw)` | 0x1C | 中继引导码长值（1B BIN） |
 | `build_set_relay_addr(addr_list, pw)` | 0x1D | 中继转发监测站地址（N×5B） |

@@ -201,11 +201,13 @@ def test_59h_water_quality_response() -> None:
     data = mask.to_bytes(5, "little") + bytes.fromhex("34120000") + bytes.fromhex("78560000")
     r = _decode(_resp(0x59, data))
     vals = {x.name: x.value for x in r.elements}
-    assert vals.get("水温") == 1234, vals
-    assert vals.get("溶解氧") == 5678, vals
+    assert vals.get("水温") == "123.4", vals
+    assert vals.get("溶解氧") == "56.78", vals
+    units = {x.name: x.unit for x in r.elements}
+    assert units.get("水温") == "℃" and units.get("溶解氧") == "mg/L", units
     # 下限 AFN=5AH
     r2 = _decode(_resp(0x5A, data))
-    assert {x.name: x.value for x in r2.elements}.get("水温") == 1234
+    assert {x.name: x.value for x in r2.elements}.get("水温") == "123.4"
     print("    59H/5AH 水质参数响应 OK")
 
 

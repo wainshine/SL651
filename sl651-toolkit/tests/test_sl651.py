@@ -342,7 +342,7 @@ def test_sl651_ascii_roundtrip() -> None:
 # 首/末值 None 表示跳过数值断言（如 F3 图片为动态摘要字符串）。
 # 该基线用于防止「CRC 通过但要素解析错误」的静默回归（审计 v2.2 M-4）。
 FUJIAN_BASELINE = [
-    (0x49, 0, None, None, None, None),
+    (0x49, 1, "03", "0x04D2", "03", "0x04D2"),
     (0x34, 14, "F5", "27.30", "38", 12.9),
     (0x32, 3, "20", 5.5, "38", 12.9),
     (0x31, 13, "04", 5, "39", 28.96),
@@ -646,7 +646,7 @@ def test_tcp_sender_threadsafe() -> None:
 def test_sl651_hex_type_ff() -> None:
     """v1.2.5 M-3 / v2.3 M-3: Hex 型要素首字节 0xFF 不误判负数前缀。
 
-    F2 为人工置数标识符（无定义符，见 0x35 契约），故此处用 F3 图片型
+    F2 为人工置数标识符（F2H 引导符 + F2H 定义符），故此处用 F3 图片型
     （唯一另一 Hex 型）验证 Hex 语义，并直接校验 `_safe_hex_val`。
     """
     from sl651 import SL651Encoder
@@ -1165,11 +1165,11 @@ def test_sl651_config_and_manual_frames() -> None:
     f41 = enc.build_read_config_frame([0x01, 0x02])
     r41 = SL651Decoder().decode(f41)
     assert r41.crc_ok and r41.function_code == 0x41 and r41.direction == 1
-    f43 = enc.build_read_config_frame([0x01], function_code=0x43)
+    f43 = enc.build_read_config_frame([0x20, 0x23], function_code=0x43)
     r43 = SL651Decoder().decode(f43)
     assert r43.crc_ok and r43.function_code == 0x43
 
-    # 0x35 人工置数报（上行，F2 标识符 + 原编码数据，规约表38）
+    # 0x35 人工置数报（上行，F2H + F2H 定义符 + 原编码数据，规约表38/表C.1 注 c）
     f35 = enc.build_manual_frame(bytes.fromhex("0102030405"))
     r35 = SL651Decoder().decode(f35)
     assert r35.crc_ok and r35.function_code == 0x35 and r35.direction == 0
@@ -1193,12 +1193,12 @@ def test_sl651_init_storage_and_password() -> None:
     f47 = enc.build_init_solid_storage()
     r47 = SL651Decoder().decode(f47)
     assert r47.crc_ok and r47.function_code == 0x47 and r47.direction == 1
-    assert f47[22:-3] == b"\x97", f"47H 数据域应为 97H: {f47[22:-3].hex()}"
+    assert f47[22:-3] == b"\x97\x00", f"47H 数据域应为 97 00: {f47[22:-3].hex()}"
 
     f49 = enc.build_change_password_frame(0x1234, 0x5678)
     r49 = SL651Decoder().decode(f49)
     assert r49.crc_ok and r49.function_code == 0x49 and r49.direction == 1
-    assert f49[22:-3] == bytes.fromhex("031234035678"), f49[22:-3].hex()
+    assert f49[22:-3] == bytes.fromhex("0310123403105678"), f49[22:-3].hex()
 
     try:
         enc.build_change_password_frame(0x10000, 0)
@@ -1296,7 +1296,7 @@ def test_sl651_manual_frame_fujian() -> None:
     r = SL651Decoder().decode(frame)
     assert r.crc_ok and r.function_code == 0x35, f"crc={r.crc_ok}"
     assert len(r.elements) == 1 and r.elements[0].code == "F2", r.elements
-    assert r.elements[0].raw == "F25120312E323334", r.elements[0].raw
+    assert r.elements[0].raw == "5120312E323334", r.elements[0].raw
     print("    福建 0x35 F2 载荷 OK")
 
 

@@ -90,71 +90,332 @@ def _fill_element(definition: dict, chunk: bytes, item_len: int) -> ElementValue
     )
 
 
-def _parse_ctrl_func_data(func_code: int, data_bytes: bytes, max_items: int | None = None) -> list[ElementValue]:
-    """解析控制功能码对应的数据。max_items 限制解析条数（综合参数用，每型仅一次）。"""
+def _parse_water_amount(data: bytes) -> tuple[str, str]:
+    """累计水量 5B 小端 BCD（表36），BYTE5 高半字节为 0；0xAA/0xFF 为缺测。"""
+    hex_str = bytes_to_hex_compact(data)
+    if _is_fill(data):
+        return ("-", hex_str)
+    try:
+        v = bcd_bytes_to_int_le(data)
+    except ValueError:
+        return ("-", hex_str)
+    return (str(v), hex_str)
+
+
+def _parse_water_quality(
+    data: bytes, *, single_bit: int | None = None,
+    warnings: list[str] | None = None,
+) -> tuple[list[ElementValue], int]:
+    """水质参数（表18）：5B 位图 + N×4B 小端 BCD；single_bit 用于 B1 单参数。"""
+    out: list[ElementValue] = []
+
+    def _spec(bit: int) -> tuple[str, str, int]:
+        if bit < len(C.WATER_QUALITY_SPECS):
+            return C.WATER_QUALITY_SPECS[bit]
+        return (f"参数{bit}", "", 0)
+
+    if _is_fill(data) or (single_bit is None and len(data) >= 5 and _is_fill(data[:5])):
+        fill_name = _spec(single_bit)[0] if single_bit is not None else "水质参数"
+        return [ElementValue(name=fill_name, value="-", unit="",
+                             raw=bytes_to_hex_compact(data), editable=False)], len(data)
+    if single_bit is not None:
+        if len(data) < 4:
+            return out, 0
+        seg = data[:4]
+        name, unit, dec = _spec(single_bit)
+        raw = bytes_to_hex_compact(seg)
+        if _is_fill(seg):
+            out.append(ElementValue(name=name, value="-", unit=unit, raw=raw,
+                                    byte_len=4, decimal=dec, editable=False))
+            return out, 4
+        try:
+            v = bcd_bytes_to_int_le(seg)
+        except ValueError:
+            out.append(ElementValue(name=name, value="-", unit=unit, raw=raw,
+                                    byte_len=4, decimal=dec, editable=False))
+            return out, 4
+        out.append(ElementValue(name=name, value=f"{v / (10 ** dec):.{dec}f}",
+                                unit=unit, raw=raw, byte_len=4, decimal=dec,
+                                editable=False))
+        return out, 4
+
+    if len(data) < 5:
+        return out, 0
+    mask = int.from_bytes(data[:5], "little")
+    pos = 5
+    for bit in range(40):
+        if not ((mask >> bit) & 1):
+            continue
+        if pos + 4 > len(data):
+            if warnings is not None:
+                warnings.append(
+                    f"水质位图有置位参数但数据不足 4B（位 {bit}），剩余未解析")
+            break
+        seg = data[pos:pos + 4]
+        pos += 4
+        name, unit, dec = _spec(bit)
+        raw = bytes_to_hex_compact(seg)
+        if _is_fill(seg):
+            out.append(ElementValue(name=name, value="-", unit=unit, raw=raw,
+                                    byte_len=4, decimal=dec, editable=False))
+            continue
+        try:
+            v = bcd_bytes_to_int_le(seg)
+        except ValueError:
+            out.append(ElementValue(name=name, value="-", unit=unit, raw=raw,
+                                    byte_len=4, decimal=dec, editable=False))
+            continue
+        out.append(ElementValue(name=name, value=f"{v / (10 ** dec):.{dec}f}",
+                                unit=unit, raw=raw, byte_len=4, decimal=dec,
+                                editable=False))
+    return out, pos
+
+
+def _parse_weather(data: bytes) -> tuple[list[ElementValue], int]:
+    """气象参数（表40，8B）：气压3B(hPa) + 风速(含风向)3B + 有符号气温2B。"""
+    out: list[ElementValue] = []
+    if len(data) < 8:
+        return out, 0
+    seg = data[:8]
+    # 气压：BYTE1 十位/个位，BYTE2 千位/百位，BYTE3 万位；单位 10^2 Pa = hPa
+    p = seg[:3]
+    if _is_fill(p):
+        out.append(ElementValue(name="气压", value="-", unit="hPa",
+                                raw=bytes_to_hex_compact(p), byte_len=3, decimal=0))
+    else:
+        try:
+            pv = bcd_bytes_to_int_le(p)
+            out.append(ElementValue(name="气压", value=str(pv), unit="hPa",
+                                    raw=bytes_to_hex_compact(p), byte_len=3, decimal=0))
+        except ValueError:
+            out.append(ElementValue(name="气压", value="-", unit="hPa",
+                                    raw=bytes_to_hex_compact(p), byte_len=3, decimal=0))
+
+    # 风速/风向：BYTE4 十分位/百分位；BYTE5 个位/十位；BYTE6 风向/百位
+    wind = seg[3:6]
+    if _is_fill(wind):
+        out.append(ElementValue(name="风速", value="-", unit="m/s",
+                                raw=bytes_to_hex_compact(wind), byte_len=2, decimal=2))
+        out.append(ElementValue(name="风向", value="-", unit="",
+                                raw=bytes_to_hex_compact(wind[2:]), byte_len=1, decimal=0))
+    else:
+        try:
+            tenths = (wind[0] >> 4) & 0x0F
+            hundredths = wind[0] & 0x0F
+            units = (wind[1] >> 4) & 0x0F
+            tens = wind[1] & 0x0F
+            direction = (wind[2] >> 4) & 0x0F
+            hundreds = wind[2] & 0x0F
+            if max(tenths, hundredths, units, tens, hundreds) > 9 or direction > 8:
+                raise ValueError("气象风速/风向非 BCD")
+            speed = hundreds * 100 + tens * 10 + units + tenths / 10 + hundredths / 100
+            out.append(ElementValue(name="风速", value=f"{speed:.2f}", unit="m/s",
+                                    raw=bytes_to_hex_compact(wind[:2]), byte_len=2, decimal=2))
+            out.append(ElementValue(name="风向", value=str(direction), unit="",
+                                    raw=bytes_to_hex_compact(wind[2:]), byte_len=1, decimal=0))
+        except ValueError:
+            out.append(ElementValue(name="风速", value="-", unit="m/s",
+                                    raw=bytes_to_hex_compact(wind), byte_len=2, decimal=2))
+            out.append(ElementValue(name="风向", value="-", unit="",
+                                    raw=bytes_to_hex_compact(wind[2:]), byte_len=1, decimal=0))
+
+    # 气温：BYTE7 个位/十分位；BYTE8 符号(0/F)+十位
+    temp = seg[6:8]
+    if _is_fill(temp):
+        out.append(ElementValue(name="气温", value="-", unit="℃",
+                                raw=bytes_to_hex_compact(temp), byte_len=2, decimal=1))
+    else:
+        try:
+            units = (temp[0] >> 4) & 0x0F
+            tenths = temp[0] & 0x0F
+            sign = (temp[1] >> 4) & 0x0F
+            tens = temp[1] & 0x0F
+            if max(units, tenths, tens) > 9 or sign not in (0x00, 0x0F):
+                raise ValueError("气象气温非 BCD")
+            tv = tens * 10 + units + tenths / 10
+            if sign == 0x0F:
+                tv = -tv
+            out.append(ElementValue(name="气温", value=f"{tv:.1f}", unit="℃",
+                                    raw=bytes_to_hex_compact(temp), byte_len=2, decimal=1))
+        except ValueError:
+            out.append(ElementValue(name="气温", value="-", unit="℃",
+                                    raw=bytes_to_hex_compact(temp), byte_len=2, decimal=1))
+    return out, 8
+
+
+def _parse_soil_record(chunk: bytes) -> list[ElementValue]:
+    """土壤含水率 4B（表42）：前 2B 含水率(0.1%) + 后 2B 采集深度(cm)。"""
+    raw = bytes_to_hex_compact(chunk)
+    if _is_fill(chunk):
+        return [
+            ElementValue(name="土壤含水率", value="-", unit="%", raw=raw,
+                         byte_len=2, decimal=1),
+            ElementValue(name="采集深度", value="-", unit="cm", raw=raw,
+                         byte_len=2, decimal=0),
+        ]
+    try:
+        moisture = bcd_bytes_to_int_le(chunk[:2]) / 10
+    except ValueError:
+        moisture = "-"
+    try:
+        depth = bcd_bytes_to_int_le(chunk[2:4])
+    except ValueError:
+        depth = "-"
+    return [
+        ElementValue(name="土壤含水率", value=moisture, unit="%", raw=raw,
+                     byte_len=2, decimal=1),
+        ElementValue(name="采集深度", value=depth, unit="cm", raw=raw,
+                     byte_len=2, decimal=0),
+    ]
+
+
+def _parse_one_scalar(func_code: int, chunk: bytes,
+                      definition: dict) -> list[ElementValue]:
+    """解析一条定长标量记录（0x01/02/04/05/06/08/09/0C/0D/0E/0F）。"""
+    if _is_fill(chunk):
+        return [_fill_element(definition, chunk, definition["byteLen"])]
+    hex_str = bytes_to_hex_compact(chunk)
+    if definition["signed"]:
+        display, raw = _parse_signed_bcd(chunk, definition["decimal"])
+        return [ElementValue(name=definition["name"], value=display,
+                             unit=definition["unit"], raw=raw,
+                             byte_len=definition["byteLen"],
+                             decimal=definition["decimal"], signed=True)]
+    v = bcd_bytes_to_int_le(chunk)
+    dec = definition["decimal"]
+    return [ElementValue(name=definition["name"],
+                         value=f"{v / (10 ** dec):.{dec}f}",
+                         unit=definition["unit"], raw=hex_str,
+                         byte_len=definition["byteLen"], decimal=dec)]
+
+
+def _parse_parameter_records(
+    func_code: int, data: bytes, *, context: str = "b0",
+    warnings: list[str] | None = None, max_records: int | None = None,
+    param_byte: int | None = None,
+) -> tuple[list[ElementValue], int]:
+    """按类型码解析参数记录，返回 (要素, 已消费字节数)。
+
+    统一处理 B0/C0/81/82/B1/FF/综合参数的差异：
+    - scalar：按 byteLen 逐条（array=False 只取首条）；
+    - flow_pair：流量5B + 累计水量5B（表35/表36）；
+    - weather：8B 拆 4 值；water_quality：5B 位图 + N×4B 或 B1 单参数 4B；
+    - soil：4B 拆含水率/深度两值。
+    """
     definition = C.CTRL_FUNC_MAP.get(func_code)
     if not definition or definition["byteLen"] == 0:
-        return []
-
-    items = []
+        return [], 0
+    kind = definition.get("kind", "scalar")
+    items: list[ElementValue] = []
     pos = 0
-    remaining = list(data_bytes)
+    records = 0
 
-    while pos < len(remaining):
-        if max_items is not None and len(items) >= max_items:
+    while pos < len(data):
+        if max_records is not None and records >= max_records:
             break
-        item_len = definition["byteLen"]
-        if pos + item_len > len(remaining):
-            break
-        chunk = bytes(remaining[pos: pos + item_len])
-        pos += item_len
-        hex_str = bytes_to_hex_compact(chunk)
-
-        if _is_fill(chunk):
-            items.append(_fill_element(definition, chunk, item_len))
+        if kind == "flow_pair":
+            if pos + 10 > len(data):
+                if pos + 5 <= len(data):
+                    # 非标实现可能只带流量、不带累计水量：按 5B 降级并留 warning
+                    flow = data[pos:pos + 5]
+                    pos += 5
+                    records += 1
+                    if _is_fill(flow):
+                        items.append(_fill_element({"name": "流量", "unit": "m³/s",
+                                                    "decimal": definition["decimal"],
+                                                    "signed": True}, flow, 5))
+                    else:
+                        display, raw, unit_str = _parse_flow(flow, definition["decimal"])
+                        items.append(ElementValue(
+                            name="流量", value=display, unit=unit_str, raw=raw,
+                            byte_len=5, decimal=definition["decimal"], signed=True))
+                    if warnings is not None:
+                        warnings.append("0x03 缺少累计水量字段，按单流量 5B 降级解析")
+                break
+            flow = data[pos:pos + 5]
+            water = data[pos + 5:pos + 10]
+            pos += 10
+            records += 1
+            flow_def = dict(definition)
+            flow_def["name"] = "流量"
+            if _is_fill(flow):
+                items.append(_fill_element(flow_def, flow, 5))
+            else:
+                display, raw, unit_str = _parse_flow(flow, definition["decimal"])
+                items.append(ElementValue(
+                    name="流量", value=display, unit=unit_str, raw=raw,
+                    byte_len=5, decimal=definition["decimal"], signed=True))
+            wv, wraw = _parse_water_amount(water)
+            items.append(ElementValue(
+                name="累计水量", value=wv, unit="m³", raw=wraw,
+                byte_len=5, decimal=0))
+        elif kind == "weather":
+            if pos + 8 > len(data):
+                break
+            parsed, used = _parse_weather(data[pos:pos + 8])
+            items.extend(parsed)
+            pos += used
+            records += 1
+        elif kind == "water_quality":
+            single_bit = None
+            if context == "b1" and param_byte is not None:
+                # 兼容两种 B1 形态：合规 5B 位图 + N×4B；或单参数 4B。
+                remaining = len(data) - pos
+                block = data[pos:]
+                is_bitmap = (
+                    remaining >= 9 and (remaining - 5) % 4 == 0
+                    and int.from_bytes(block[:5], "little").bit_count()
+                    == (remaining - 5) // 4
+                )
+                if not is_bitmap:
+                    single_bit = param_byte & 0x0F
+            parsed, used = _parse_water_quality(
+                data[pos:], single_bit=single_bit, warnings=warnings)
+            if used == 0:
+                break
+            items.extend(parsed)
+            pos += used
+            records += 1
+        elif kind == "soil":
+            if pos + 4 > len(data):
+                break
+            items.extend(_parse_soil_record(data[pos:pos + 4]))
+            pos += 4
+            records += 1
+        else:
+            item_len = definition["byteLen"]
+            if pos + item_len > len(data):
+                break
+            chunk = data[pos:pos + item_len]
+            items.extend(_parse_one_scalar(func_code, chunk, definition))
+            pos += item_len
+            records += 1
             if not definition["array"]:
                 break
-            continue
+    return items, pos
 
-        if func_code == 0x03:
-            display, raw, unit_str = _parse_flow(chunk, definition["decimal"])
-            items.append(ElementValue(
-                name=definition["name"],
-                value=display,
-                unit=unit_str,
-                raw=raw,
-                byte_len=item_len,
-                decimal=definition["decimal"],
-                signed=definition["signed"],
-            ))
-        elif definition["signed"]:
-            result = _parse_signed_bcd(chunk, definition["decimal"])
-            result_unit = definition["unit"]
-            items.append(ElementValue(
-                name=definition["name"],
-                value=result[0],
-                unit=result_unit,
-                raw=result[1],
-                byte_len=item_len,
-                decimal=definition["decimal"],
-                signed=definition["signed"],
-            ))
-        else:
-            v = bcd_bytes_to_int_le(chunk)
-            result = (f"{v / (10 ** definition['decimal']):.{definition['decimal']}f}", hex_str)
-            items.append(ElementValue(
-                name=definition["name"],
-                value=result[0],
-                unit=definition["unit"],
-                raw=result[1],
-                byte_len=item_len,
-                decimal=definition["decimal"],
-                signed=definition["signed"],
-            ))
-        if not definition["array"]:
-            break
 
+def _parse_ctrl_func_data(func_code: int, data_bytes: bytes,
+                          max_items: int | None = None) -> list[ElementValue]:
+    """兼容包装：返回要素列表（不返回消费量）。新代码请用 _parse_parameter_records。"""
+    items, _ = _parse_parameter_records(
+        func_code, data_bytes, context="raw", max_records=max_items)
     return items
+
+
+def _extend_parameter_records(
+    elements: list[ElementValue], func_code: int, data: bytes, *,
+    context: str, warnings: list[str],
+) -> int:
+    """解析并把要素追加到 elements；尾随字节统一写 warning（不静默丢弃）。"""
+    parsed, consumed = _parse_parameter_records(
+        func_code, data, context=context, warnings=warnings)
+    elements.extend(parsed)
+    if consumed < len(data):
+        warnings.append(
+            f"参数字段 {len(data)}B，已解析 {consumed}B，"
+            f"剩余 {len(data) - consumed}B 未展开")
+    return consumed
 
 
 def _parse_signed_bcd(data: bytes, decimal: int) -> tuple[str, str]:
@@ -199,59 +460,74 @@ def _parse_flow(data: bytes, decimal: int) -> tuple[str, str, str]:
 
 
 def _parse_comprehensive(data: bytes, warnings: list[str] | None = None) -> list[ElementValue]:
-    """解析综合参数（0x0E 功能码）。
-    按规范表45，D0~D7 依次为水质/土壤含水率/功率/气象/闸位/流量/水位/雨量。
+    """解析综合参数（0x0E 功能码，表45）。
 
-    综合参数是「按位图定长定位块」布局，每个置位 bit 恰好消费 byteLen 字节；
-    不能用数组「跳过填充找下一个值」的语义，否则填充块会吃掉下一参数的数据。
+    D0~D7 依次为水质/土壤含水率/功率/气象/闸位/流量/水位/雨量；每个置位参数
+    在数据区出现且仅出现一次，按各自的块长消费（0x03=10B、0x07=8B、
+    0x0A=5+N×4B、0x0B=4B，其余按 byteLen）。
     """
     if len(data) == 0:
         return []
     if warnings is None:
         warnings = []
     bit_flag = data[0]
-    offset = 0
+    offset = 1
     items: list[ElementValue] = []
     for i in range(len(C.COMP_BITS)):
         if not (bit_flag & (1 << i)):
             continue
         func_code = C.COMP_BITS[i]
-        definition = C.CTRL_FUNC_MAP.get(func_code)
-        item_len = definition["byteLen"] if definition else 0
-        if item_len <= 0:
-            continue
-        if 1 + offset + item_len > len(data):
+        parsed, consumed = _parse_parameter_records(
+            func_code, data[offset:], context="comprehensive",
+            warnings=warnings, max_records=1)
+        if consumed == 0:
             warnings.append(
-                f"综合参数 0x0E 数据不足：bit{i} 需要 {item_len} 字节，"
-                f"剩余 {max(0, len(data) - 1 - offset)} 字节"
+                f"综合参数 0x0E 数据不足：bit{i}(0x{func_code:02X}) 无法解析，"
+                f"剩余 {max(0, len(data) - offset)} 字节"
             )
             break
-        chunk = data[1 + offset: 1 + offset + item_len]
-        items.extend(_parse_ctrl_func_data(func_code, chunk, max_items=1))
-        offset += item_len
+        items.extend(parsed)
+        offset += consumed
+    if offset < len(data):
+        warnings.append(
+            f"综合参数 0x0E 剩余 {len(data) - offset} 字节未展开")
     return items
 
 
+def _statistical_rain_type_name(rtype: int) -> str:
+    """表54：D7~D6=类别（00 时段/01 小时/10 日/11 测试），D5~D0=时段长度。"""
+    cls = (rtype >> 6) & 0x03
+    length = rtype & 0x3F
+    if cls == 0:
+        return f"时段降雨量({length * 5}min)"
+    if cls == 1:
+        return f"小时降雨量({length}h)"
+    if cls == 2:
+        return f"日降雨量({length}d)"
+    return "测试/累计雨量"
+
+
 def _parse_statistical_rainfall(data: bytes) -> list[ElementValue]:
-    """解析上行统计雨量（0x0E），规范7.5.6 c：1B 雨量类型 + 3B 雨量数据（小端 BCD）。"""
+    """解析上行统计雨量（0x0E），规范7.5.6 c：1B 雨量类型 + 3B 雨量数据（小端 BCD）。
+
+    表33：3B 雨量数据以 0.1mm 为单位；表54：类型字节 D7~D6=类别、D5~D0=时长。
+    """
     items = []
     pos = 0
-    rain_type_map = {0x00: "本次", 0x01: "小时", 0x02: "日", 0x03: "月", 0x04: "年"}
     while pos + 4 <= len(data):
         rtype = data[pos]
         rdata = data[pos + 1: pos + 4]
         pos += 4
         try:
             v = bcd_bytes_to_int_le(rdata)
-            val = f"{v / 100:.2f}"
+            val = f"{v / 10:.1f}"
         except (ValueError, IndexError):
             val = "-"
-        rtype_name = rain_type_map.get(rtype, f"类型0x{rtype:02X}")
         items.append(ElementValue(
-            name=f"统计雨量({rtype_name})",
+            name=f"统计雨量({_statistical_rain_type_name(rtype)})",
             value=val, unit="mm",
             raw=bytes_to_hex_compact(bytes([rtype]) + rdata),
-            byte_len=4, decimal=2,
+            byte_len=4, decimal=1,
         ))
     return items
 
@@ -412,28 +688,15 @@ def _parse_pressure_limits_427(seg: bytes) -> list[ElementValue]:
     ]
 
 
-def _parse_water_quality_427(data: bytes) -> list[ElementValue]:
+def _parse_water_quality_427(
+    data: bytes, warnings: list[str] | None = None,
+) -> list[ElementValue]:
     """解析水质参数种类及上/下限（表18，5B 位图 + N×4B 小端 BCD）。"""
-    out: list[ElementValue] = []
-    if len(data) < 5:
-        return out
-    if _is_fill(data):
-        return [ElementValue(name="水质参数", value="-", unit="",
-                             raw=bytes_to_hex_compact(data), editable=False)]
-    mask = int.from_bytes(data[:5], "little")
-    body = data[5:]
-    idx = 0
-    for bit in range(40):
-        if (mask >> bit) & 1:
-            seg = body[idx * 4:idx * 4 + 4]
-            if len(seg) < 4:
-                break
-            name = C.WATER_QUALITY_PARAMS[bit] if bit < len(C.WATER_QUALITY_PARAMS) else f"参数{bit}"
-            v = _safe_bcd_le(seg)
-            out.append(ElementValue(name=name, value=v if v is not None else "-",
-                                    unit="", raw=bytes_to_hex_compact(seg),
-                                    editable=False))
-            idx += 1
+    out, consumed = _parse_water_quality(data, warnings=warnings)
+    if warnings is not None and consumed and consumed < len(data):
+        warnings.append(
+            f"水质参数数据 {len(data)}B，已解析 {consumed}B，"
+            f"剩余 {len(data) - consumed}B 未展开")
     return out
 
 
@@ -470,10 +733,29 @@ def _parse_channel_427(data: bytes) -> list[ElementValue]:
     return out
 
 
-def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
+def _warn_tail(warnings: list[str] | None, total: int, consumed: int,
+               label: str) -> None:
+    if warnings is not None and consumed < total:
+        warnings.append(
+            f"{label} 数据 {total}B，已解析 {consumed}B，"
+            f"剩余 {total - consumed}B 未展开")
+
+
+def _parse_query_response(
+    afn_hex: str, data: bytes, warnings: list[str] | None = None,
+) -> list[ElementValue]:
     """解析查询类响应帧（AFN=50H~65H，规约 7.3.2~7.3.21）。"""
     out: list[ElementValue] = []
     raw = bytes_to_hex_compact(data)
+
+    fixed_len = {
+        "50": 5, "51": 6, "52": 1, "54": 2, "55": 9, "56": 8,
+        "5d": 64, "5e": 4, "5f": 12, "60": 1,
+    }.get(afn_hex)
+    if (warnings is not None and fixed_len is not None
+            and len(data) != fixed_len):
+        warnings.append(
+            f"AFN={afn_hex.upper()}H 数据域 {len(data)}B，规约固定 {fixed_len}B")
 
     if afn_hex == "50":
         if len(data) >= 5:
@@ -511,6 +793,10 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                 out.append(ElementValue(name=f"自报间隔[{label}]",
                                         value=iv if iv is not None else "-",
                                         unit="min", raw=raw, editable=False))
+            if warnings is not None and len(data) != 30:
+                warnings.append(
+                    f"AFN=53H 数据域 {len(data)}B，规约固定 30B（14 个间隔），"
+                    "按实际长度解析")
         else:
             out.append(ElementValue(name="数据自报种类及间隔", value=f"{len(data)} 字节",
                                     unit="bytes", raw=raw, editable=False))
@@ -571,6 +857,7 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
             out.append(ElementValue(name=f"转发站地址[{i + 1}]", value=_format_addr(seg),
                                     unit="", raw=bytes_to_hex_compact(seg),
                                     editable=False))
+        _warn_tail(warnings, len(data), n * 5, "AFN=62H")
     elif afn_hex == "5d":
         n = min(len(data) // 2, len(C.EVENT_RECORDS))
         for i in range(n):
@@ -579,6 +866,7 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
             out.append(ElementValue(name=f"事件记录[{C.EVENT_RECORDS[i]}]", value=cnt,
                                     unit="次", raw=bytes_to_hex_compact(seg),
                                     editable=False))
+        _warn_tail(warnings, len(data), n * 2, "AFN=5DH")
     elif afn_hex == "57":
         # N×7B 水位基值/上下限 + 4B 终端机报警状态
         if len(data) >= 4:
@@ -587,6 +875,7 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                 for e in _parse_level_limits_427(body[i * 7:i * 7 + 7]):
                     e.name = f"{e.name}[{i + 1}]"
                     out.append(e)
+            _warn_tail(warnings, len(body), (len(body) // 7) * 7, "AFN=57H")
             out.extend(_parse_alarm(tail[:2]))
             out.extend(_parse_terminal(tail[2:4]))
     elif afn_hex == "58":
@@ -597,10 +886,11 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                 for e in _parse_pressure_limits_427(body[i * 8:i * 8 + 8]):
                     e.name = f"{e.name}[{i + 1}]"
                     out.append(e)
+            _warn_tail(warnings, len(body), (len(body) // 8) * 8, "AFN=58H")
             out.extend(_parse_alarm(tail[:2]))
             out.extend(_parse_terminal(tail[2:4]))
     elif afn_hex in ("59", "5a"):
-        out.extend(_parse_water_quality_427(data))
+        out.extend(_parse_water_quality_427(data, warnings))
     elif afn_hex == "65":
         out.extend(_parse_channel_427(data))
     elif afn_hex == "63":
@@ -631,6 +921,7 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                                         value=_parse_switch_record_427(seg),
                                         unit="", raw=bytes_to_hex_compact(seg),
                                         editable=False, is_time=True))
+            _warn_tail(warnings, len(rec), (len(rec) // 5) * 5, "AFN=63H")
     elif afn_hex == "64":
         # 流量参数上限 N×5B + 报警(2B)+状态(2B)
         if len(data) >= 4:
@@ -642,6 +933,7 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                 out.append(ElementValue(name=f"流量上限[{i + 1}]", value=val,
                                         unit=unit, raw=bytes_to_hex_compact(seg),
                                         editable=False))
+            _warn_tail(warnings, len(body), n * 5, "AFN=64H")
             out.extend(_parse_alarm(tail[:2]))
             out.extend(_parse_terminal(tail[2:4]))
     else:
@@ -650,10 +942,21 @@ def _parse_query_response(afn_hex: str, data: bytes) -> list[ElementValue]:
     return out
 
 
-def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
+def _parse_control_response(
+    afn_hex: str, data: bytes, warnings: list[str] | None = None,
+) -> list[ElementValue]:
     """解析控制命令响应帧（AFN=90H~96H，规约 7.4）与配置响应（A0H~A2H）。"""
     out: list[ElementValue] = []
     raw = bytes_to_hex_compact(data)
+
+    fixed_len = {
+        "90": 1, "91": 1, "92": 1, "93": 1, "94": 1, "95": 1,
+        "96": 2, "a0": 2,
+    }.get(afn_hex)
+    if (warnings is not None and fixed_len is not None
+            and len(data) != fixed_len):
+        warnings.append(
+            f"AFN={afn_hex.upper()}H 数据域 {len(data)}B，规约固定 {fixed_len}B")
 
     if afn_hex == "90":
         if data:
@@ -727,6 +1030,10 @@ def _parse_control_response(afn_hex: str, data: bytes) -> list[ElementValue]:
                 out.append(ElementValue(name=f"自报间隔[{label}]",
                                         value=iv if iv is not None else "-",
                                         unit="min", raw=raw, editable=False))
+            if warnings is not None and len(data) != 30:
+                warnings.append(
+                    f"AFN=A1H 数据域 {len(data)}B，规约固定 30B（14 个间隔），"
+                    "按实际长度解析")
     elif afn_hex == "a2":
         out.append(ElementValue(name="主备信道配置", value=raw, unit="",
                                 raw=raw, editable=False))
@@ -1199,31 +1506,32 @@ class SL427Decoder:
             return [self._raw_param_element("重组原始数据", data_field)], None
 
     def _parse_b1_records(
-        self, func_code: int, rest: bytes, warnings: list[str]
+        self, func_code: int, rest: bytes, warnings: list[str],
+        param_byte: int | None = None,
     ) -> list[ElementValue]:
-        """按 func_code 展开 B1 存储记录；返回已解析要素，余字节留 warning。"""
+        """按 func_code 展开 B1 存储记录；返回已解析要素，余字节留 warning。
+
+        统一走 `_parse_parameter_records` 的 consumed 对账：0x03 按流量+累计水量
+        成对（10B）、0x07 按 8B、0x0A 按 B1 单参数 4B、0x0B 按 4B，其余按 byteLen。
+        """
         if func_code == 0x0E:
             items = _parse_statistical_rainfall(rest)
             consumed = len(items) * 4
         else:
             definition = C.CTRL_FUNC_MAP.get(func_code)
-            item_len = definition["byteLen"] if definition else 0
-            if not definition or item_len <= 0:
+            if not definition or definition["byteLen"] <= 0:
                 return []
             items = []
-            if definition.get("array", False):
-                items = _parse_ctrl_func_data(func_code, rest)
-                consumed = len(items) * item_len
-            else:
-                pos = 0
-                while pos + item_len <= len(rest):
-                    chunk = rest[pos:pos + item_len]
-                    parsed = _parse_ctrl_func_data(func_code, chunk)
-                    if not parsed:
-                        break
-                    items.extend(parsed)
-                    pos += item_len
-                consumed = pos
+            consumed = 0
+            while consumed < len(rest):
+                parsed, used = _parse_parameter_records(
+                    func_code, rest[consumed:], context="b1",
+                    warnings=warnings, max_records=1,
+                    param_byte=param_byte)
+                if used == 0:
+                    break
+                items.extend(parsed)
+                consumed += used
         if items and consumed < len(rest):
             warnings.append(
                 f"AFN=B1H 存储数据 {len(rest)}B，已解析 {consumed}B，"
@@ -1279,7 +1587,9 @@ class SL427Decoder:
                     if func_code == 0x0E:
                         elements.extend(_parse_statistical_rainfall(real_data))
                     else:
-                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                        _extend_parameter_records(
+                            elements, func_code, real_data,
+                            context="c0", warnings=warnings)
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)
@@ -1304,7 +1614,9 @@ class SL427Decoder:
                     elif data_field:
                         elements.append(self._raw_param_element("0x0D 参数原始数据", data_field))
                 else:
-                    elements.extend(_parse_ctrl_func_data(func_code, data_field))
+                    _extend_parameter_records(
+                        elements, func_code, data_field,
+                        context="c0", warnings=warnings)
 
         elif afn_hex == "b0":
             # 查询响应：data + alarm(2B) + state(2B)（规范7.3.22）
@@ -1319,14 +1631,18 @@ class SL427Decoder:
                     if func_code == 0x0E:
                         elements.extend(_parse_comprehensive(real_data, warnings))
                     else:
-                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                        _extend_parameter_records(
+                            elements, func_code, real_data,
+                            context="b0", warnings=warnings)
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
             else:
                 if func_code == 0x0E:
                     elements.extend(_parse_comprehensive(data_field, warnings))
                 else:
-                    elements.extend(_parse_ctrl_func_data(func_code, data_field))
+                    _extend_parameter_records(
+                        elements, func_code, data_field,
+                        context="b0", warnings=warnings)
 
         elif afn_hex in ("61", "83"):
             special_info = {"type": "image", "bytes": data_field}
@@ -1354,7 +1670,9 @@ class SL427Decoder:
                     if func_code == 0x0E:
                         elements.extend(_parse_statistical_rainfall(real_data))
                     else:
-                        elements.extend(_parse_ctrl_func_data(func_code, real_data))
+                        _extend_parameter_records(
+                            elements, func_code, real_data,
+                            context=afn_hex, warnings=warnings)
                 elements.extend(_parse_alarm(alarm_bytes))
                 elements.extend(_parse_terminal(state_bytes))
                 tp_str = _fmt_time_427(tp_bytes)
@@ -1378,7 +1696,9 @@ class SL427Decoder:
                     elif data_field:
                         elements.append(self._raw_param_element("0x0D 参数原始数据", data_field))
                 else:
-                    elements.extend(_parse_ctrl_func_data(func_code, data_field))
+                    _extend_parameter_records(
+                        elements, func_code, data_field,
+                        context="81", warnings=warnings)
 
         elif afn_hex == "b1":
             # 查询固态存储数据响应：前9B = 参数种类/编号 + 起止时间（表48），
@@ -1421,7 +1741,7 @@ class SL427Decoder:
                     ))
                 rest = data_field[9:]
                 if rest:
-                    parsed = self._parse_b1_records(func_code, rest, warnings)
+                    parsed = self._parse_b1_records(func_code, rest, warnings, param_byte=param)
                     if parsed:
                         elements.extend(parsed)
                     else:
@@ -1459,10 +1779,10 @@ class SL427Decoder:
             "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
             "5a", "5c", "5d", "5e", "5f", "60", "62", "63", "64", "65",
         ):
-            elements.extend(_parse_query_response(afn_hex, data_field))
+            elements.extend(_parse_query_response(afn_hex, data_field, warnings))
 
         elif afn_hex in ("90", "91", "92", "93", "94", "95", "96", "a0", "a1", "a2"):
-            elements.extend(_parse_control_response(afn_hex, data_field))
+            elements.extend(_parse_control_response(afn_hex, data_field, warnings))
 
         elif afn_hex == "ff":
             # FFH 用户自定义扩展：按 AFN_TP_ONLY 声明含尾部 Tp(7B)，剥离后再解析数据域
@@ -1476,7 +1796,9 @@ class SL427Decoder:
             if func_code == 0x0E:
                 elements.extend(_parse_comprehensive(ff_data, warnings))
             else:
-                elements.extend(_parse_ctrl_func_data(func_code, ff_data))
+                _extend_parameter_records(
+                    elements, func_code, ff_data,
+                    context="ff", warnings=warnings)
             if tp_str:
                 elements.append(ElementValue(
                     name="观测时间", value=tp_str, unit="",
